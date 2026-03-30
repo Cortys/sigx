@@ -110,3 +110,15 @@ def test_build_returns_immutable_signature() -> None:
 
     assert isinstance(result.params, tuple)
     assert result.return_annotation == "None"
+
+
+def test_build_preserves_type_params() -> None:
+    sig = SignatureIR(
+        params=(SigParam("x", ParamKind.POS_OR_KW, "T", None),),
+        return_annotation="T",
+        type_params=("T",),
+    )
+
+    result = SignatureBuilder.from_signature(sig).build()
+
+    assert result.type_params == ("T",)

@@ -90,6 +90,12 @@ sigx-gen check --src-root src
 
 When a module contains at least one transformed function, `sigx-gen` emits a module-complete stub for that module (including undecorated top-level functions and discovered methods). Modules without transformed functions are skipped.
 
+Standalone generation also preserves key typing constructs:
+
+- function type parameters are preserved in emitted signatures (for example `def run[T](...) -> T`)
+- imports found under top-level `TYPE_CHECKING` guards are included in stub import synthesis
+- transformed signatures and overloads are rendered deterministically in decorator-application order
+
 ### Patch backend (integrate with existing stub pipelines)
 
 Install optional patch dependency:
@@ -117,7 +123,7 @@ sigx-gen apply --plan sigx-plan.json
 - nested functions are ignored
 - local reassignments and dynamic aliases are not resolved
 - patch backend currently targets top-level functions and class methods
-- supported decorator forms are intentionally limited (`@name`, `@module.name`, and call variants)
+- type-only import discovery is limited to top-level `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` blocks
 
 ## Safety note
 

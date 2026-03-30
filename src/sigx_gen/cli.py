@@ -11,7 +11,7 @@ import sys
 from sigx_gen.config import ApplyConfig, GenerationConfig, PlanConfig
 from sigx_gen.emit.patch_base import apply_patch_plan
 from sigx_gen.emit.patch_libcst import build_libcst_backend
-from sigx_gen.emit.standalone import check_outputs, render_standalone_outputs, write_outputs
+from sigx_gen.emit.standalone import check_outputs, render_standalone_outputs_with_diagnostics, write_outputs
 from sigx_gen.io.plan_json import read_plan_json, write_plan_json
 from sigx_gen.model.diagnostics import Diagnostic
 from sigx_gen.model.symbols import DiscoveredModule
@@ -84,12 +84,13 @@ def run_generate(config: GenerationConfig) -> int:  # noqa: PLR0911
 
     diagnostics = list(diagnostics_or_error)
     if config.backend == "standalone":
-        rendered = render_standalone_outputs(
+        rendered, render_diagnostics = render_standalone_outputs_with_diagnostics(
             modules,
             transformed_functions,
             src_root=config.src_root,
             out_root=config.out_root,
         )
+        diagnostics.extend(render_diagnostics)
         _emit_diagnostics(tuple(diagnostics))
         if config.check:
             mismatches = check_outputs(rendered)

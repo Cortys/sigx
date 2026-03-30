@@ -28,7 +28,7 @@ def collect_missing_module_imports(
     """
     dotted_roots: set[str] = set()
     for signature in signatures:
-        _, signature_dotted_roots = _collect_signature_name_usage(signature)
+        _, signature_dotted_roots = collect_signature_name_usage(signature)
         dotted_roots.update(signature_dotted_roots)
 
     blocked_names = imported_names | local_symbol_names | _BUILTIN_NAMES | {"typing"}
@@ -59,9 +59,25 @@ def collect_imported_names(import_statements: tuple[str, ...]) -> set[str]:
     return imported_names
 
 
-def _collect_signature_name_usage(signature: SignatureIR) -> tuple[set[str], set[str]]:
+def collect_signature_name_usage(signature: SignatureIR) -> tuple[set[str], set[str]]:
+    """Collect referenced bare names and dotted roots from one signature.
+
+    Args:
+        signature: Signature to inspect.
+
+    Returns:
+        Two sets containing bare names and dotted-root names.
+    """
     bare_names: set[str] = set()
     dotted_roots: set[str] = set()
+    for type_param in signature.type_params:
+        type_param_names = _extract_type_param_names(type_param)
+        bare_names.update(type_param_names)
+        for expr in _extract_type_param_exprs(type_param):
+            expr_bare, expr_dotted = _collect_expr_name_usage(expr)
+            bare_names.update(expr_bare)
+            dotted_roots.update(expr_dotted)
+
     for param in signature.params:
         param_bare, param_dotted = _collect_expr_name_usage(param.annotation)
         bare_names.update(param_bare)
@@ -75,6 +91,69 @@ def _collect_signature_name_usage(signature: SignatureIR) -> tuple[set[str], set
     bare_names.update(return_bare)
     dotted_roots.update(return_dotted)
     return bare_names, dotted_roots
+
+
+def collect_unresolved_annotation_names(
+    signature: SignatureIR,
+    *,
+    imported_names: set[str],
+    local_symbol_names: set[str],
+) -> tuple[str, ...]:
+    """Collect unresolved names referenced by a signature.
+
+    Args:
+        signature: Signature to inspect.
+        imported_names: Locally available imported names.
+        local_symbol_names: Locally defined module names.
+
+    Returns:
+        Sorted tuple of unresolved names.
+    """
+    bare_names, dotted_roots = collect_signature_name_usage(signature)
+    type_param_names = {name for type_param in signature.type_params for name in _extract_type_param_names(type_param)}
+    blocked = imported_names | local_symbol_names | _BUILTIN_NAMES | {"typing"} | type_param_names
+    unresolved = {name for name in bare_names | dotted_roots if name not in blocked}
+    return tuple(sorted(unresolved))
+
+
+def _extract_type_param_names(type_param_decl: str) -> set[str]:
+    decl = type_param_decl.strip()
+    if decl.startswith("**"):
+        decl = decl[2:]
+    elif decl.startswith("*"):
+        decl = decl[1:]
+
+    name = decl
+    if ":" in name:
+        name = name.split(":", maxsplit=1)[0]
+    if "=" in name:
+        name = name.split("=", maxsplit=1)[0]
+    name = name.strip()
+    if not name:
+        return set()
+    return {name}
+
+
+def _extract_type_param_exprs(type_param_decl: str) -> tuple[str, ...]:
+    decl = type_param_decl.strip()
+    bound_expr: str | None = None
+    default_expr: str | None = None
+
+    if ":" in decl:
+        after_colon = decl.split(":", maxsplit=1)[1].strip()
+        if "=" in after_colon:
+            bound_expr, default_expr = (part.strip() for part in after_colon.split("=", maxsplit=1))
+        else:
+            bound_expr = after_colon
+    elif "=" in decl:
+        default_expr = decl.split("=", maxsplit=1)[1].strip()
+
+    exprs: list[str] = []
+    if bound_expr:
+        exprs.append(bound_expr)
+    if default_expr:
+        exprs.append(default_expr)
+    return tuple(exprs)
 
 
 def _collect_expr_name_usage(expr: str | None) -> tuple[set[str], set[str]]:

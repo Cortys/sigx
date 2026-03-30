@@ -169,3 +169,123 @@ def test_e2e_generate_adds_missing_root_import_for_dotted_annotation(tmp_path: P
         "import pkga\n\n"
         "def run(name: str, *, c: pkga.b.C = ...) -> None: ...\n"
     )
+
+
+def test_e2e_generate_preserves_generic_type_params(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    package_name = f"myproj_{uuid.uuid4().hex[:8]}"
+    package = src_root / package_name
+    package.mkdir(parents=True)
+
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "decorators.py").write_text(
+        (
+            "from sigx import stub_transform\n\n"
+            f'@stub_transform("{package_name}.stub_transforms:add_flag")\n'
+            "def add_flag(func):\n"
+            "    return func\n"
+        ),
+        encoding="utf-8",
+    )
+    (package / "stub_transforms.py").write_text(
+        (
+            "from sigx_gen.builder import SignatureBuilder\n\n"
+            "def add_flag(ctx):\n"
+            "    builder = SignatureBuilder.from_signature(ctx.original)\n"
+            '    builder.add_kwonly("flag", annotation="Any", default="...")\n'
+            "    return builder.build()\n"
+        ),
+        encoding="utf-8",
+    )
+    (package / "jobs.py").write_text(
+        (
+            f"from {package_name}.decorators import add_flag\n\n"
+            "@add_flag\n"
+            "def run[T](value: T) -> T:\n"
+            "    return value\n"
+        ),
+        encoding="utf-8",
+    )
+
+    sys.path.insert(0, str(src_root))
+    importlib.invalidate_caches()
+    try:
+        modules = discover_modules(src_root)
+        discovered = tuple(function for module in modules for function in module.functions)
+        result = apply_transforms(discovered)
+        outputs = render_standalone_outputs(modules, result.functions, src_root=src_root, out_root=src_root)
+        write_outputs(outputs)
+    finally:
+        if str(src_root) in sys.path:
+            sys.path.remove(str(src_root))
+
+    jobs_stub_path = src_root / package_name / "jobs.pyi"
+    assert jobs_stub_path.read_text(encoding="utf-8") == (
+        f"from {package_name}.decorators import add_flag\n\n"
+        "from typing import Any\n\n"
+        "def run[T](value: T, *, flag: Any = ...) -> T: ...\n"
+    )
+
+
+def test_e2e_generate_type_checking_imports_survive(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    package_name = f"myproj_{uuid.uuid4().hex[:8]}"
+    package = src_root / package_name
+    external = src_root / "external"
+    package.mkdir(parents=True)
+    external.mkdir(parents=True)
+
+    (external / "__init__.py").write_text("", encoding="utf-8")
+    (external / "types.py").write_text("class Model:\n    pass\n", encoding="utf-8")
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "decorators.py").write_text(
+        (
+            "from sigx import stub_transform\n\n"
+            f'@stub_transform("{package_name}.stub_transforms:add_debug")\n'
+            "def add_debug(func):\n"
+            "    return func\n"
+        ),
+        encoding="utf-8",
+    )
+    (package / "stub_transforms.py").write_text(
+        (
+            "from sigx_gen.builder import SignatureBuilder\n\n"
+            "def add_debug(ctx):\n"
+            "    builder = SignatureBuilder.from_signature(ctx.original)\n"
+            '    builder.add_kwonly("debug", annotation="bool", default="False")\n'
+            "    return builder.build()\n"
+        ),
+        encoding="utf-8",
+    )
+    (package / "jobs.py").write_text(
+        (
+            "from typing import TYPE_CHECKING\n"
+            f"from {package_name}.decorators import add_debug\n\n"
+            "if TYPE_CHECKING:\n"
+            "    from external.types import Model\n\n"
+            "@add_debug\n"
+            "def run(model: Model) -> None:\n"
+            "    pass\n"
+        ),
+        encoding="utf-8",
+    )
+
+    sys.path.insert(0, str(src_root))
+    importlib.invalidate_caches()
+    try:
+        modules = discover_modules(src_root)
+        discovered = tuple(function for module in modules for function in module.functions)
+        result = apply_transforms(discovered)
+        outputs = render_standalone_outputs(modules, result.functions, src_root=src_root, out_root=src_root)
+        write_outputs(outputs)
+    finally:
+        if str(src_root) in sys.path:
+            sys.path.remove(str(src_root))
+
+    jobs_stub_path = src_root / package_name / "jobs.pyi"
+    assert jobs_stub_path.read_text(encoding="utf-8") == (
+        "from typing import TYPE_CHECKING\n\n"
+        f"from {package_name}.decorators import add_debug\n\n"
+        "from external.types import Model\n\n"
+        "def run(model: Model, *, debug: bool = False) -> None: ...\n"
+    )

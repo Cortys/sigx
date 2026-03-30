@@ -62,3 +62,13 @@ def test_render_return_annotation() -> None:
 def test_any_import_detection() -> None:
     assert needs_any_import(["(x: int) -> None", "(x: Any) -> None"])
     assert not needs_any_import(["(x: int) -> None"])
+
+
+def test_render_with_type_params() -> None:
+    sig = SignatureIR(
+        params=(SigParam("x", ParamKind.POS_OR_KW, "T", None),),
+        return_annotation="T",
+        type_params=("T: pkg.types.Bound = pkg.types.Default",),
+    )
+
+    assert render_signature(sig) == "[T: pkg.types.Bound = pkg.types.Default](x: T) -> T"

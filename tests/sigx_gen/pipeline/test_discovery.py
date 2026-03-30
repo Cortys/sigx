@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from sigx_gen.model.signature import ParamKind
-from sigx_gen.pipeline.discovery import derive_module_name, discover_functions, extract_signature_from_node
+from sigx_gen.pipeline.discovery import (
+    derive_module_name,
+    discover_functions,
+    discover_modules,
+    extract_signature_from_node,
+)
 
 
 def test_module_name_derivation() -> None:
@@ -81,3 +86,40 @@ def test_extract_annotations_defaults_and_async(tmp_path: Path) -> None:
     assert sig.params[1].default == "'x'"
     assert sig.params[2].annotation == "int"
     assert sig.params[3].default == "True"
+
+
+def test_discovery_extracts_function_type_params(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    pkg = src_root / "pkg"
+    pkg.mkdir(parents=True)
+    file_path = pkg / "mod.py"
+    file_path.write_text(
+        ("def run[T: pkg.types.Bound = pkg.types.Default](x: T) -> T:\n    return x\n"),
+        encoding="utf-8",
+    )
+
+    function = discover_functions(src_root)[0]
+    sig = extract_signature_from_node(function.node)
+
+    assert sig.type_params == ("T: pkg.types.Bound = pkg.types.Default",)
+
+
+def test_discovery_collects_type_checking_imports(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    pkg = src_root / "pkg"
+    pkg.mkdir(parents=True)
+    file_path = pkg / "mod.py"
+    file_path.write_text(
+        (
+            "from typing import TYPE_CHECKING\n\n"
+            "if TYPE_CHECKING:\n"
+            "    from pkga.types import Model\n"
+            "\n"
+            "def run(x: Model) -> None:\n"
+            "    pass\n"
+        ),
+        encoding="utf-8",
+    )
+
+    module = discover_modules(src_root)[0]
+    assert "from pkga.types import Model" in module.import_statements

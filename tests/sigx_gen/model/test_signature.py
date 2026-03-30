@@ -36,3 +36,13 @@ def test_index_of() -> None:
     assert sig.index_of("first") == 0
     assert sig.index_of("second") == 1
     assert sig.index_of("other") is None
+
+
+def test_type_params_are_stored() -> None:
+    sig = SignatureIR(
+        params=(SigParam(name="x", kind=ParamKind.POS_OR_KW, annotation="T", default=None),),
+        return_annotation="T",
+        type_params=("T",),
+    )
+
+    assert sig.type_params == ("T",)

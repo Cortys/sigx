@@ -74,7 +74,7 @@ class DiscoveredModule:
         module_name: Module dotted path.
         file_path: Source file path.
         imports: Import aliases table.
-        import_statements: Import statements from source, as code strings.
+        import_statements: Import statements from source, including top-level ``TYPE_CHECKING`` blocks.
         class_names: Top-level class names in source order.
         variables: Top-level variables in source order.
         functions: Top-level functions and class methods in source order.

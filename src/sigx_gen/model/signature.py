@@ -38,6 +38,7 @@ class SignatureIR:
     """Immutable internal representation of a callable signature.
 
     Attributes:
+        type_params: Function-level type parameter declarations.
         params: Ordered parameter list.
         return_annotation: Return annotation string, if present.
         is_async: Whether the function is async.
@@ -46,6 +47,7 @@ class SignatureIR:
     params: tuple[SigParam, ...]
     return_annotation: str | None
     is_async: bool = False
+    type_params: tuple[str, ...] = ()
 
     def get_param(self, name: str) -> SigParam | None:
         """Return a parameter by name.

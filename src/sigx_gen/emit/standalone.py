@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import ast
 from collections import defaultdict
 from pathlib import Path
 
-from sigx_gen.emit.imports import collect_imported_names, collect_missing_module_imports
+from sigx_gen.emit.imports import (
+    collect_imported_names,
+    collect_missing_module_imports,
+    collect_unresolved_annotation_names,
+)
 from sigx_gen.emit.render import needs_any_import, render_signature
+from sigx_gen.model.diagnostics import Diagnostic, DiagnosticLevel
 from sigx_gen.model.signature import SignatureIR
 from sigx_gen.model.symbols import DiscoveredFunction, DiscoveredModule
 from sigx_gen.pipeline.discovery import extract_signature_from_node
@@ -31,19 +37,49 @@ def render_standalone_outputs(
     Returns:
         Mapping of target stub path to rendered content.
     """
+    rendered, _ = render_standalone_outputs_with_diagnostics(
+        modules,
+        transformed_functions,
+        src_root=src_root,
+        out_root=out_root,
+    )
+    return rendered
+
+
+def render_standalone_outputs_with_diagnostics(
+    modules: tuple[DiscoveredModule, ...],
+    transformed_functions: tuple[TransformedFunction, ...],
+    *,
+    src_root: Path,
+    out_root: Path,
+) -> tuple[dict[Path, str], tuple[Diagnostic, ...]]:
+    """Render standalone stubs and collect rendering diagnostics.
+
+    Args:
+        modules: Discovered modules with complete symbol surfaces.
+        transformed_functions: Functions with transformed signature sets.
+        src_root: Source tree root.
+        out_root: Output tree root.
+
+    Returns:
+        Tuple of rendered output mapping and diagnostics.
+    """
     transformed_by_module: dict[str, dict[str, tuple[SignatureIR, ...]]] = defaultdict(dict)
     for function in transformed_functions:
         transformed_by_module[function.module_name][function.qualname] = function.signatures
 
     rendered: dict[Path, str] = {}
+    diagnostics: list[Diagnostic] = []
     for module in modules:
         module_transforms = transformed_by_module.get(module.module_name)
         if not module_transforms:
             continue
 
         output_path = _output_path(module.file_path, src_root=src_root, out_root=out_root)
-        rendered[output_path] = _render_module_text(module, module_transforms)
-    return rendered
+        module_text, module_diagnostics = _render_module_text(module, module_transforms)
+        diagnostics.extend(module_diagnostics)
+        rendered[output_path] = module_text
+    return rendered, tuple(diagnostics)
 
 
 def write_outputs(rendered_outputs: dict[Path, str]) -> tuple[Path, ...]:
@@ -88,7 +124,10 @@ def _output_path(source_file: Path, *, src_root: Path, out_root: Path) -> Path:
     return out_root / relative.with_suffix(".pyi")
 
 
-def _render_module_text(module: DiscoveredModule, transformed: dict[str, tuple[SignatureIR, ...]]) -> str:
+def _render_module_text(
+    module: DiscoveredModule,
+    transformed: dict[str, tuple[SignatureIR, ...]],
+) -> tuple[str, tuple[Diagnostic, ...]]:
     signature_map = {
         function.qualname: transformed.get(function.qualname, (extract_signature_from_node(function.node),))
         for function in module.functions
@@ -128,14 +167,42 @@ def _render_module_text(module: DiscoveredModule, transformed: dict[str, tuple[S
         variable_lines.append(f"{variable.name}: {annotation}")
 
     blocks: list[str] = []
-    blocks.extend(_render_import_block(module, rendered_signature_strings, variable_lines, signature_map))
+    import_lines, import_names = _render_import_block(module, rendered_signature_strings, variable_lines, signature_map)
+    blocks.extend(import_lines)
+
+    local_names = {variable.name for variable in module.variables}
+    local_names.update(module.class_names)
+    local_names.update(function.function_name for function in module.functions if function.class_name is None)
+    diagnostics = _build_unresolved_name_diagnostics(
+        module,
+        module.functions,
+        signature_map,
+        imported_names=import_names,
+        local_names=local_names,
+    )
+
     if variable_lines:
         blocks.append("\n".join(variable_lines))
     if top_level_blocks:
         blocks.append("\n\n".join(top_level_blocks))
     if class_blocks:
         blocks.append("\n\n".join(class_blocks))
-    return "\n\n".join(blocks) + "\n"
+    module_text = "\n\n".join(blocks) + "\n"
+
+    try:
+        ast.parse(module_text)
+    except SyntaxError as exc:
+        diagnostics.append(
+            Diagnostic(
+                level=DiagnosticLevel.ERROR,
+                code="SX023",
+                message=f"Rendered stub could not be parsed: {exc.msg}",
+                module_name=module.module_name,
+                file_path=str(module.file_path),
+            )
+        )
+
+    return module_text, tuple(diagnostics)
 
 
 def _render_import_block(
@@ -143,18 +210,19 @@ def _render_import_block(
     rendered_signatures: list[str],
     variable_lines: list[str],
     signature_map: dict[str, tuple[SignatureIR, ...]],
-) -> list[str]:
+) -> tuple[list[str], set[str]]:
     import_lines = list(dict.fromkeys(module.import_statements))
     imported_names = collect_imported_names(module.import_statements)
     local_names = {variable.name for variable in module.variables}
     local_names.update(module.class_names)
     local_names.update(function.function_name for function in module.functions if function.class_name is None)
     all_signatures = tuple(signature for signatures in signature_map.values() for signature in signatures)
-    for root_module in collect_missing_module_imports(
+    missing_root_modules = collect_missing_module_imports(
         all_signatures,
         imported_names=imported_names,
         local_symbol_names=local_names,
-    ):
+    )
+    for root_module in missing_root_modules:
         import_line = f"import {root_module}"
         if import_line not in import_lines:
             import_lines.append(import_line)
@@ -169,7 +237,46 @@ def _render_import_block(
         if typing_line not in import_lines:
             import_lines.append(typing_line)
 
-    return import_lines
+    imported_names.update(missing_root_modules)
+    imported_names.update(typing_imports)
+    return import_lines, imported_names
+
+
+def _build_unresolved_name_diagnostics(
+    module: DiscoveredModule,
+    functions: tuple[DiscoveredFunction, ...] | list[DiscoveredFunction],
+    signature_map: dict[str, tuple[SignatureIR, ...]],
+    *,
+    imported_names: set[str],
+    local_names: set[str],
+) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    for function in functions:
+        signatures = signature_map[function.qualname]
+        unresolved_names = sorted(
+            {
+                unresolved
+                for signature in signatures
+                for unresolved in collect_unresolved_annotation_names(
+                    signature,
+                    imported_names=imported_names,
+                    local_symbol_names=local_names,
+                )
+            }
+        )
+        if not unresolved_names:
+            continue
+        diagnostics.append(
+            Diagnostic(
+                level=DiagnosticLevel.WARNING,
+                code="SX022",
+                message=f"Unresolved annotation symbols in emitted stub: {', '.join(unresolved_names)}",
+                module_name=module.module_name,
+                qualname=function.qualname,
+                file_path=str(module.file_path),
+            )
+        )
+    return diagnostics
 
 
 def _render_function_block(function_name: str, rendered_signatures: list[str]) -> str:

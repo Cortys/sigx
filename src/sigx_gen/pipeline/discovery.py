@@ -136,6 +136,7 @@ def extract_signature_from_node(node: ast.FunctionDef | ast.AsyncFunctionDef) ->
         params=tuple(params),
         return_annotation=_unparse_or_none(node.returns),
         is_async=isinstance(node, ast.AsyncFunctionDef),
+        type_params=tuple(ast.unparse(type_param) for type_param in getattr(node, "type_params", ())),
     )
 
 
@@ -211,7 +212,7 @@ def _collect_variables(module_ast: ast.Module) -> list[DiscoveredVariable]:
 
 def _collect_import_aliases(module_ast: ast.Module) -> list[ImportAlias]:
     aliases: list[ImportAlias] = []
-    for statement in module_ast.body:
+    for statement in _iter_import_statements(module_ast):
         if isinstance(statement, ast.Import):
             for alias in statement.names:
                 local_name = alias.asname or alias.name.split(".")[0]
@@ -241,9 +242,32 @@ def _collect_import_aliases(module_ast: ast.Module) -> list[ImportAlias]:
 
 
 def _collect_import_statements(module_ast: ast.Module) -> list[str]:
-    return [
-        ast.unparse(statement) for statement in module_ast.body if isinstance(statement, (ast.Import, ast.ImportFrom))
-    ]
+    return [ast.unparse(statement) for statement in _iter_import_statements(module_ast)]
+
+
+def _iter_import_statements(module_ast: ast.Module) -> tuple[ast.Import | ast.ImportFrom, ...]:
+    statements: list[ast.Import | ast.ImportFrom] = []
+    for statement in module_ast.body:
+        if isinstance(statement, (ast.Import, ast.ImportFrom)):
+            statements.append(statement)
+            continue
+        if not _is_type_checking_guard(statement):
+            continue
+        if not isinstance(statement, ast.If):
+            continue
+        statements.extend(inner for inner in statement.body if isinstance(inner, (ast.Import, ast.ImportFrom)))
+    return tuple(statements)
+
+
+def _is_type_checking_guard(statement: ast.stmt) -> bool:
+    if not isinstance(statement, ast.If):
+        return False
+    test = statement.test
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute) and isinstance(test.value, ast.Name):
+        return test.value.id == "typing" and test.attr == "TYPE_CHECKING"
+    return False
 
 
 def _unparse_or_none(value: ast.AST | None) -> str | None:

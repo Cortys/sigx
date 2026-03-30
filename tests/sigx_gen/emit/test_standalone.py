@@ -68,3 +68,46 @@ def test_standalone_backend_skips_modules_without_transforms(tmp_path: Path) -> 
     outputs = render_standalone_outputs(modules, (), src_root=src_root, out_root=tmp_path / "out")
 
     assert outputs == {}
+
+
+def test_standalone_backend_keeps_type_checking_imports_for_annotations(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    pkg = src_root / "pkg"
+    pkg.mkdir(parents=True)
+    source_file = pkg / "mod.py"
+    source_file.write_text(
+        (
+            "from typing import TYPE_CHECKING\n\n"
+            "if TYPE_CHECKING:\n"
+            "    from pkga.types import Model\n"
+            "\n"
+            "def run[T](x: Model) -> T:\n"
+            "    ...\n"
+        ),
+        encoding="utf-8",
+    )
+
+    modules = discover_modules(src_root)
+    transformed = (
+        TransformedFunction(
+            module_name="pkg.mod",
+            file_path=source_file,
+            qualname="run",
+            function_name="run",
+            class_name=None,
+            is_method=False,
+            signatures=(
+                SignatureIR(
+                    params=(SigParam("x", ParamKind.POS_OR_KW, "Model", None),),
+                    return_annotation="T",
+                    type_params=("T",),
+                ),
+            ),
+        ),
+    )
+
+    outputs = render_standalone_outputs(modules, transformed, src_root=src_root, out_root=tmp_path / "out")
+    output_path = tmp_path / "out" / "pkg" / "mod.pyi"
+
+    assert "from pkga.types import Model" in outputs[output_path]
+    assert "def run[T](x: Model) -> T: ..." in outputs[output_path]

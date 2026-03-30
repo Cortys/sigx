@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from sigx_gen.emit.imports import collect_imported_names, collect_missing_module_imports
+from sigx_gen.emit.imports import (
+    collect_imported_names,
+    collect_missing_module_imports,
+    collect_unresolved_annotation_names,
+)
 from sigx_gen.model.signature import ParamKind, SignatureIR, SigParam
 
 
@@ -30,3 +34,37 @@ def test_collect_missing_module_imports_detects_dotted_roots() -> None:
     )
 
     assert missing == ("pkga",)
+
+
+def test_collect_missing_module_imports_includes_type_param_bounds() -> None:
+    signatures = (
+        SignatureIR(
+            params=(SigParam("x", ParamKind.POS_OR_KW, "T", None),),
+            return_annotation="T",
+            type_params=("T: pkga.types.Bound = pkga.types.Default",),
+        ),
+    )
+
+    missing = collect_missing_module_imports(
+        signatures,
+        imported_names=set(),
+        local_symbol_names=set(),
+    )
+
+    assert missing == ("pkga",)
+
+
+def test_collect_unresolved_annotation_names_respects_type_params() -> None:
+    signature = SignatureIR(
+        params=(SigParam("x", ParamKind.POS_OR_KW, "T", None),),
+        return_annotation="T",
+        type_params=("T",),
+    )
+
+    unresolved = collect_unresolved_annotation_names(
+        signature,
+        imported_names=set(),
+        local_symbol_names=set(),
+    )
+
+    assert unresolved == ()

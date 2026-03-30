@@ -8,17 +8,25 @@ from sigx_gen.signature_ir import ParamKind, SignatureIR, SigParam
 class SignatureBuilder:
     """Mutable helper for building transformed signatures."""
 
-    def __init__(self, params: list[SigParam], return_annotation: str | None, is_async: bool) -> None:
+    def __init__(
+        self,
+        params: list[SigParam],
+        return_annotation: str | None,
+        is_async: bool,
+        type_params: tuple[str, ...],
+    ) -> None:
         """Initialize the builder.
 
         Args:
             params: Mutable parameter list.
             return_annotation: Return annotation string.
             is_async: Whether the target is async.
+            type_params: Function-level type parameter declarations.
         """
         self._params = params
         self._return_annotation = return_annotation
         self._is_async = is_async
+        self._type_params = type_params
         self._validate_unique_names()
 
     @classmethod
@@ -31,7 +39,12 @@ class SignatureBuilder:
         Returns:
             A new builder seeded from ``sig``.
         """
-        return cls(params=list(sig.params), return_annotation=sig.return_annotation, is_async=sig.is_async)
+        return cls(
+            params=list(sig.params),
+            return_annotation=sig.return_annotation,
+            is_async=sig.is_async,
+            type_params=sig.type_params,
+        )
 
     def add_kwonly(
         self,
@@ -128,6 +141,7 @@ class SignatureBuilder:
             params=tuple(self._params),
             return_annotation=self._return_annotation,
             is_async=self._is_async,
+            type_params=self._type_params,
         )
 
     def _index_of(self, name: str) -> int | None:

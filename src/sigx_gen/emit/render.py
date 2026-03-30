@@ -35,8 +35,11 @@ def render_signature(sig: SignatureIR) -> str:
         if last_pos_only_index == index:
             tokens.append("/")
 
+    type_params_prefix = ""
+    if sig.type_params:
+        type_params_prefix = f"[{', '.join(sig.type_params)}]"
     return_annotation = sig.return_annotation or "Any"
-    return f"({', '.join(tokens)}) -> {return_annotation}"
+    return f"{type_params_prefix}({', '.join(tokens)}) -> {return_annotation}"
 
 
 def needs_any_import(rendered_signatures: Iterable[str]) -> bool:
