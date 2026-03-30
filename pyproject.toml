@@ -1,0 +1,102 @@
+[project]
+name = "sigx"
+dynamic = ["version"]
+description = "A pyi stub generator for typing complex function decorators."
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["./src"]
+include = ["sigx*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sigx.__version__" }
+readme = { file = [
+    "README.md",
+    "CHANGELOG.md",
+], content-type = "text/markdown" }
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.5",       # for testing
+    "pytest-cov>=6.0.0",   # for coverage
+    "pytest-xdist>=3.6.1", # for parallel testing
+    "packaging",           # for version parsing
+]
+lint = [
+    "ruff>=0.15.8", # for linting
+    "ty>=0.0.26",   # for static type checking
+]
+dev = [
+    "ipykernel>=6.29.5",
+    "notebook>=7.3.3",
+    "ipywidgets",
+    { include-group = "test" },
+    { include-group = "lint" },
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+output-format = "full"
+
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "N812",    # Checks for lowercase imports that are aliased to non-lowercase names (e.g. torch.nn.functional as F)
+    "RET504",  # Unnecessary assignment to {name} before return statement
+    "PLR2004", # Magic value used in comparison, consider replacing {value} with a constant variable
+    "FBT",     # enforce keyword for bool
+    "PLR0913", # too many arguments (>5)
+    "FIX002",  # TODOs are fine in code
+    "COM812",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = [
+    "S101",
+    "INP001",
+    "D101",
+    "D102",
+    "D103",
+    "D404",
+    "ANN001",
+    "ANN201",
+    "ANN202",
+    "FBT001",
+    "D100",
+    "PLR2004",
+    "PD901",
+    "TCH",
+    "N803",
+    "C901",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+# Use isort-compatible settings
+[tool.ruff.lint.isort]
+known-first-party = ["sigx"]
+force-sort-within-sections = true
+combine-as-imports = true
+force-single-line = false
+no-lines-before = ["future"]
+extra-standard-library = ["typing_extensions"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+minversion = "8.0"
+addopts = [
+    "--import-mode=importlib", # to avoid issues with lazy imports
+]
