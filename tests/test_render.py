@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from sigx_gen.render import needs_any_import, render_signature
+from sigx_gen.signature_ir import ParamKind, SignatureIR, SigParam
+
+
+def test_render_no_kw_only() -> None:
+    sig = SignatureIR(
+        params=(
+            SigParam("x", ParamKind.POS_OR_KW, "int", None),
+            SigParam("y", ParamKind.POS_OR_KW, "str", "'a'"),
+        ),
+        return_annotation="None",
+    )
+
+    assert render_signature(sig) == "(x: int, y: str = 'a') -> None"
+
+
+def test_render_kw_only_with_synthetic_star() -> None:
+    sig = SignatureIR(
+        params=(
+            SigParam("x", ParamKind.POS_OR_KW, "int", None),
+            SigParam("debug", ParamKind.KW_ONLY, "Any", "..."),
+        ),
+        return_annotation="None",
+    )
+
+    assert render_signature(sig) == "(x: int, *, debug: Any = ...) -> None"
+
+
+def test_render_kw_only_with_var_pos() -> None:
+    sig = SignatureIR(
+        params=(
+            SigParam("x", ParamKind.POS_OR_KW, "int", None),
+            SigParam("args", ParamKind.VAR_POS, "int", None),
+            SigParam("debug", ParamKind.KW_ONLY, "Any", "..."),
+        ),
+        return_annotation="None",
+    )
+
+    assert render_signature(sig) == "(x: int, *args: int, debug: Any = ...) -> None"
+
+
+def test_render_kw_only_before_kwargs() -> None:
+    sig = SignatureIR(
+        params=(
+            SigParam("x", ParamKind.POS_OR_KW, "int", None),
+            SigParam("debug", ParamKind.KW_ONLY, "Any", "..."),
+            SigParam("kwargs", ParamKind.VAR_KW, "object", None),
+        ),
+        return_annotation="None",
+    )
+
+    assert render_signature(sig) == "(x: int, *, debug: Any = ..., **kwargs: object) -> None"
+
+
+def test_render_return_annotation() -> None:
+    sig = SignatureIR(params=(SigParam("x", ParamKind.POS_OR_KW, "int", None),), return_annotation="str")
+    assert render_signature(sig) == "(x: int) -> str"
+
+
+def test_any_import_detection() -> None:
+    assert needs_any_import(["(x: int) -> None", "(x: Any) -> None"])
+    assert not needs_any_import(["(x: int) -> None"])

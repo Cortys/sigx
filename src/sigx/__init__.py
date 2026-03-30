@@ -1,8 +1,13 @@
-"""sigx: Runtime package for sigx-gen.
+"""Public runtime API for sigx."""
 
-This package provides the runtime decorators used by sigx-gen to analyze and generate .pyi stub files.
-The provided decorators in this sigx do not perform any runtime modifications to the functions they decorate;
-instead, they serve as markers for sigx-gen to identify and process the decorated functions when generating type stubs.
-"""
+from sigx.model import TransformKind, TransformMetadata
+from sigx.runtime import stub_transform, stub_transform_factory
+
+__all__ = [
+    "TransformKind",
+    "TransformMetadata",
+    "stub_transform",
+    "stub_transform_factory",
+]
 
 __version__ = "0.1.0"
