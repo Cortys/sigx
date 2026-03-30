@@ -7,6 +7,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.optional-dependencies]
+patch = ["libcst>=1.6.0"]
+
 [project.scripts]
 sigx-gen = "sigx_gen.cli:main"
 
@@ -76,9 +79,11 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = [
+"tests/**/*.py" = [
     "S101",
     "S108",
+    "S603",
+    "S607",
     "INP001",
     "D101",
     "D102",
@@ -95,6 +100,20 @@ convention = "google"
     "TCH",
     "N803",
     "C901",
+]
+"tests/fixtures/**/*.py" = [
+    "ARG001",
+    "ARG002",
+    "D100",
+    "D104",
+    "INP001",
+]
+"src/sigx_gen/emit/patch_libcst.py" = [
+    "ANN401",
+    "ARG002",
+    "F841",
+    "N802",
+    "PERF401",
 ]
 
 [tool.ruff.lint.mccabe]

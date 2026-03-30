@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sigx_gen.signature_ir import ParamKind, SignatureIR, SigParam
+from sigx_gen.model.signature import ParamKind, SignatureIR, SigParam
 
 
 def test_has_param() -> None:

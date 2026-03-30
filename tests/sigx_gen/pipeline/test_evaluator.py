@@ -5,7 +5,7 @@ from types import ModuleType
 
 import pytest
 
-from sigx_gen.eval import DecoratorEvaluationError, evaluate_factory_arguments
+from sigx_gen.pipeline.evaluator import DecoratorEvaluationError, evaluate_factory_arguments
 
 
 def _decorator_call(source: str) -> ast.Call:

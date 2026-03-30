@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sigx_gen.render import needs_any_import, render_signature
-from sigx_gen.signature_ir import ParamKind, SignatureIR, SigParam
+from sigx_gen.emit.render import needs_any_import, render_signature
+from sigx_gen.model.signature import ParamKind, SignatureIR, SigParam
 
 
 def test_render_no_kw_only() -> None:

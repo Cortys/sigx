@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sigx_gen.discovery import derive_module_name, discover_functions, extract_signature_from_node
-from sigx_gen.signature_ir import ParamKind
+from sigx_gen.model.signature import ParamKind
+from sigx_gen.pipeline.discovery import derive_module_name, discover_functions, extract_signature_from_node
 
 
 def test_module_name_derivation() -> None:

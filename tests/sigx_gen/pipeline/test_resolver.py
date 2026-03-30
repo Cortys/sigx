@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import ast
 
-from sigx_gen.discovery import ImportAlias
-from sigx_gen.resolver import resolve_decorator
+from sigx_gen.model.symbols import ImportAlias
+from sigx_gen.pipeline.resolver import resolve_decorator
 
 
 def _decorator_expr(source: str) -> ast.expr:

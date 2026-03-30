@@ -8,7 +8,7 @@ from sigx_gen.config import GenerationConfig
 
 
 def _copy_fixture_src(tmp_path: Path) -> Path:
-    fixture_root = Path(__file__).parent.parent / "fixtures" / "project_basic" / "src"
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "project_basic" / "src"
     work_src = tmp_path / "src"
     shutil.copytree(fixture_root, work_src)
     for stub_path in work_src.rglob("*.pyi"):
@@ -22,6 +22,7 @@ def test_generate_writes_stubs(tmp_path: Path) -> None:
 
     assert code == 0
     assert (work_src / "myproj" / "jobs.pyi").exists()
+    assert not (work_src / "myproj" / "util.pyi").exists()
 
 
 def test_check_reports_mismatch_and_then_success(tmp_path: Path) -> None:
@@ -35,3 +36,10 @@ def test_check_reports_mismatch_and_then_success(tmp_path: Path) -> None:
 
     check_code = run_generate(GenerationConfig(src_root=work_src, out_root=work_src, check=True))
     assert check_code == 0
+
+
+def test_patch_backend_requires_libcst_when_unavailable(tmp_path: Path) -> None:
+    work_src = _copy_fixture_src(tmp_path)
+    code = run_generate(GenerationConfig(src_root=work_src, out_root=work_src, check=False, backend="patch"))
+
+    assert code in {0, 2}

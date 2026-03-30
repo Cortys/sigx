@@ -8,9 +8,9 @@ import uuid
 
 import pytest
 
-from sigx_gen.discovery import discover_functions
-from sigx_gen.engine import apply_transforms
-from sigx_gen.signature_ir import ParamKind
+from sigx_gen.model.signature import ParamKind
+from sigx_gen.pipeline.discovery import discover_functions
+from sigx_gen.pipeline.transformer import apply_transforms
 
 
 @pytest.fixture

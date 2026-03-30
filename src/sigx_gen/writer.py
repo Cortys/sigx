@@ -1,11 +1,10 @@
-"""Stub output grouping, checking, and file writing helpers."""
-
-from __future__ import annotations
+"""Backward-compatible wrappers for standalone writer helpers."""
 
 from collections import defaultdict
 from pathlib import Path
 
-from sigx_gen.engine import TransformedFunction
+from sigx_gen.emit.standalone import check_outputs, write_outputs
+from sigx_gen.pipeline.transformer import TransformedFunction
 from sigx_gen.render import needs_any_import, render_signature
 
 
@@ -15,15 +14,15 @@ def render_module_outputs(
     src_root: Path,
     out_root: Path,
 ) -> dict[Path, str]:
-    """Render transformed signatures into per-module stub texts.
+    """Render outputs using compatibility function signature.
 
     Args:
-        functions: Transformed function results.
-        src_root: Source root used for relative output paths.
-        out_root: Output root where stubs are mirrored.
+        functions: Transformed functions for rendering.
+        src_root: Source root path.
+        out_root: Output root path.
 
     Returns:
-        Mapping of output ``.pyi`` path to rendered text.
+        Mapping of output path to rendered content.
     """
     by_module: dict[str, list[TransformedFunction]] = defaultdict(list)
     for function in functions:
@@ -38,41 +37,30 @@ def render_module_outputs(
 
 
 def write_module_outputs(rendered_outputs: dict[Path, str]) -> tuple[Path, ...]:
-    """Write rendered stub outputs to disk.
+    """Write rendered outputs to disk.
 
     Args:
-        rendered_outputs: Output mapping produced by ``render_module_outputs``.
+        rendered_outputs: Mapping from path to content.
 
     Returns:
-        Tuple of written file paths.
+        Written paths.
     """
-    written: list[Path] = []
-    for path in sorted(rendered_outputs):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(rendered_outputs[path], encoding="utf-8")
-        written.append(path)
-    return tuple(written)
+    return write_outputs(rendered_outputs)
 
 
 def check_module_outputs(rendered_outputs: dict[Path, str]) -> tuple[Path, ...]:
-    """Check whether rendered outputs match on-disk files.
+    """Check rendered outputs against disk.
 
     Args:
-        rendered_outputs: Output mapping produced by ``render_module_outputs``.
+        rendered_outputs: Mapping from path to content.
 
     Returns:
-        Paths that differ from generated content.
+        Mismatched paths.
     """
-    mismatches: list[Path] = []
-    for path in sorted(rendered_outputs):
-        expected = rendered_outputs[path]
-        if not path.exists():
-            mismatches.append(path)
-            continue
-        existing = path.read_text(encoding="utf-8")
-        if existing != expected:
-            mismatches.append(path)
-    return tuple(mismatches)
+    return check_outputs(rendered_outputs)
+
+
+__all__ = ["check_module_outputs", "render_module_outputs", "write_module_outputs"]
 
 
 def _output_path(source_file: Path, *, src_root: Path, out_root: Path) -> Path:
