@@ -6,3 +6,4 @@ This folder contains small source snippets and their generated `.pyi` outputs.
 - `plain_decorator`: plain decorator adds a single keyword-only parameter
 - `class_method`: decorator factory applied to a class method
 - `stacked_factories`: same factory stacked twice, preserving source-order transform application
+- `mutually_exclusive_kwargs`: one decorator transform returns two signatures, rendered as overloads

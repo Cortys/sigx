@@ -11,6 +11,8 @@ def _copy_fixture_src(tmp_path: Path) -> Path:
     fixture_root = Path(__file__).parent.parent / "fixtures" / "project_basic" / "src"
     work_src = tmp_path / "src"
     shutil.copytree(fixture_root, work_src)
+    for stub_path in work_src.rglob("*.pyi"):
+        stub_path.unlink()
     return work_src
 
 

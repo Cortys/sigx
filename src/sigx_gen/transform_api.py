@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from sigx_gen.signature_ir import SignatureIR
@@ -110,5 +110,6 @@ class TransformFactoryContext:
     bound_factory_args: BoundArgumentsView
 
 
-type PlainTransform = Callable[[TransformContext], SignatureIR]
-type FactoryTransform = Callable[[TransformFactoryContext], SignatureIR]
+type TransformResult = SignatureIR | Sequence[SignatureIR]
+type PlainTransform = Callable[[TransformContext], TransformResult]
+type FactoryTransform = Callable[[TransformFactoryContext], TransformResult]

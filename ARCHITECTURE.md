@@ -33,18 +33,20 @@ This document summarizes how `sigx` runtime markers and `sigx-gen` generation fl
 
 2. `engine.apply_transforms(discovered_functions)`
    - For each function, starts from AST-extracted `SignatureIR`.
-   - Processes decorators in source order (top to bottom).
+   - Processes decorators in decorator-application order (bottom to top).
    - Resolves decorator references via `resolver.resolve_decorator(...)`.
    - Imports decorator module and loads runtime metadata via `loader`.
    - Loads generator callback from `module:function` ref.
    - For factory decorators, evaluates call arguments in module globals via `eval.evaluate_factory_arguments(...)` and binds them.
-   - Calls transform callback with context and updates current `SignatureIR` sequentially.
+   - Calls transform callback with context and updates current signatures sequentially.
+   - Transform callbacks can return one signature or multiple signatures; multiple returns branch into overload candidates via cross-product semantics.
    - Collects `Diagnostic` entries for unresolved/failed sites and continues.
 
 3. `writer.render_module_outputs(...)`
    - Groups transformed functions by module.
    - Uses `render.render_signature(...)` to emit signature text.
-   - Adds `from typing import Any` if any rendered signature contains `Any`.
+   - Adds typing imports as needed (`Any`, `overload`).
+   - Renders multiple signatures for one function as `@overload` blocks.
    - Emits top-level functions and minimal class blocks for transformed methods.
 
 4. `writer.write_module_outputs(...)` or `writer.check_module_outputs(...)`

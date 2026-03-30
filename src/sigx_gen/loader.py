@@ -7,7 +7,6 @@ from importlib import import_module
 from types import ModuleType
 
 from sigx.model import TRANSFORM_ATTR, TransformMetadata
-from sigx_gen.signature_ir import SignatureIR
 
 
 def load_module(module_name: str) -> ModuleType:
@@ -41,7 +40,7 @@ def load_transform_metadata(obj: object) -> TransformMetadata | None:
     return None
 
 
-def load_transform_callable(ref: str) -> Callable[..., SignatureIR]:
+def load_transform_callable(ref: str) -> Callable[..., object]:
     """Import a transform callback from a dotted reference.
 
     Args:

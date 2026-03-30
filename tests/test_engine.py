@@ -28,6 +28,9 @@ def fixture_project(tmp_path: Path) -> Iterator[tuple[Path, str]]:
             f'@stub_transform("{package_name}.stub_transforms:add_plain_kwonly")\n'
             "def plain_dec(func):\n"
             "    return func\n\n"
+            f'@stub_transform("{package_name}.stub_transforms:add_either_kwonly")\n'
+            "def either_dec(func):\n"
+            "    return func\n\n"
             f'@stub_transform_factory("{package_name}.stub_transforms:add_factory_kwargs")\n'
             "def add_kwargs(kwarg_list):\n"
             "    def decorator(func):\n"
@@ -37,6 +40,12 @@ def fixture_project(tmp_path: Path) -> Iterator[tuple[Path, str]]:
             "    return func\n\n"
             f'@stub_transform("{package_name}.stub_transforms:broken_transform")\n'
             "def broken(func):\n"
+            "    return func\n"
+            f'@stub_transform("{package_name}.stub_transforms:invalid_empty_transform")\n'
+            "def invalid_empty(func):\n"
+            "    return func\n\n"
+            f'@stub_transform("{package_name}.stub_transforms:invalid_item_transform")\n'
+            "def invalid_item(func):\n"
             "    return func\n"
         ),
         encoding="utf-8",
@@ -53,6 +62,16 @@ def fixture_project(tmp_path: Path) -> Iterator[tuple[Path, str]]:
             '    for name in ctx.bound_factory_args.arguments["kwarg_list"]:\n'
             '        builder.add_kwonly(name, annotation="Any", default="...")\n'
             "    return builder.build()\n\n"
+            "def add_either_kwonly(ctx):\n"
+            "    option_a = SignatureBuilder.from_signature(ctx.original)\n"
+            '    option_a.add_kwonly("a", annotation="Any", default="...")\n'
+            "    option_b = SignatureBuilder.from_signature(ctx.original)\n"
+            '    option_b.add_kwonly("b", annotation="Any", default="...")\n'
+            "    return [option_a.build(), option_b.build()]\n\n"
+            "def invalid_empty_transform(ctx):\n"
+            "    return []\n\n"
+            "def invalid_item_transform(ctx):\n"
+            "    return [ctx.original, 42]\n\n"
             "def broken_transform(ctx):\n"
             '    raise RuntimeError("boom")\n'
         ),
@@ -62,6 +81,9 @@ def fixture_project(tmp_path: Path) -> Iterator[tuple[Path, str]]:
         (
             f"from {package_name}.decorators import add_kwargs\n"
             f"from {package_name}.decorators import broken\n"
+            f"from {package_name}.decorators import either_dec\n"
+            f"from {package_name}.decorators import invalid_empty\n"
+            f"from {package_name}.decorators import invalid_item\n"
             f"from {package_name}.decorators import plain_dec\n"
             f"from {package_name}.decorators import regular\n\n"
             "@plain_dec\n"
@@ -74,11 +96,21 @@ def fixture_project(tmp_path: Path) -> Iterator[tuple[Path, str]]:
             '@add_kwargs(["bottom"])\n'
             "def ordered_job(name: str) -> None:\n"
             "    pass\n\n"
+            "@plain_dec\n"
+            "@either_dec\n"
+            "def branching_job(name: str) -> None:\n"
+            "    pass\n\n"
             "@regular\n"
             "def no_meta(name: str) -> None:\n"
             "    pass\n\n"
             "@broken\n"
             "def broken_job(name: str) -> None:\n"
+            "    pass\n\n"
+            "@invalid_empty\n"
+            "def invalid_empty_job(name: str) -> None:\n"
+            "    pass\n\n"
+            "@invalid_item\n"
+            "def invalid_item_job(name: str) -> None:\n"
             "    pass\n"
         ),
         encoding="utf-8",
@@ -99,12 +131,12 @@ def test_plain_decorator_transform_applied(fixture_project: tuple[Path, str]) ->
 
     result = apply_transforms(discovered)
     signatures = {
-        item.function_name: item.signature for item in result.functions if item.module_name == f"{package_name}.jobs"
+        item.function_name: item.signatures for item in result.functions if item.module_name == f"{package_name}.jobs"
     }
 
     assert "plain_job" in signatures
-    assert signatures["plain_job"].has_param("plain")
-    plain_param = signatures["plain_job"].get_param("plain")
+    assert signatures["plain_job"][0].has_param("plain")
+    plain_param = signatures["plain_job"][0].get_param("plain")
     assert plain_param is not None
     assert plain_param.kind == ParamKind.KW_ONLY
 
@@ -115,11 +147,11 @@ def test_decorator_factory_transform_applied(fixture_project: tuple[Path, str]) 
 
     result = apply_transforms(discovered)
     signatures = {
-        item.function_name: item.signature for item in result.functions if item.module_name == f"{package_name}.jobs"
+        item.function_name: item.signatures for item in result.functions if item.module_name == f"{package_name}.jobs"
     }
 
-    assert signatures["factory_job"].has_param("debug")
-    assert signatures["factory_job"].has_param("trace")
+    assert signatures["factory_job"][0].has_param("debug")
+    assert signatures["factory_job"][0].has_param("trace")
 
 
 def test_multiple_transforms_apply_in_source_order(fixture_project: tuple[Path, str]) -> None:
@@ -128,11 +160,27 @@ def test_multiple_transforms_apply_in_source_order(fixture_project: tuple[Path, 
 
     result = apply_transforms(discovered)
     ordered = {
-        item.function_name: item.signature for item in result.functions if item.module_name == f"{package_name}.jobs"
-    }["ordered_job"]
+        item.function_name: item.signatures for item in result.functions if item.module_name == f"{package_name}.jobs"
+    }["ordered_job"][0]
 
     names = [param.name for param in ordered.params if param.kind == ParamKind.KW_ONLY]
-    assert names == ["top", "bottom"]
+    assert names == ["bottom", "top"]
+
+
+def test_cross_product_branching_respects_bottom_to_top_order(fixture_project: tuple[Path, str]) -> None:
+    src_root, package_name = fixture_project
+    discovered = discover_functions(src_root)
+
+    result = apply_transforms(discovered)
+    branched = {
+        item.function_name: item.signatures for item in result.functions if item.module_name == f"{package_name}.jobs"
+    }["branching_job"]
+
+    assert len(branched) == 2
+    branch_kwonly_names = [
+        [param.name for param in signature.params if param.kind == ParamKind.KW_ONLY] for signature in branched
+    ]
+    assert branch_kwonly_names == [["a", "plain"], ["b", "plain"]]
 
 
 def test_decorator_without_metadata_is_ignored(fixture_project: tuple[Path, str]) -> None:
@@ -155,5 +203,25 @@ def test_transform_callback_failure_recorded(fixture_project: tuple[Path, str]) 
         diagnostic.code == "SX007"
         and diagnostic.module_name == f"{package_name}.jobs"
         and diagnostic.qualname == "broken_job"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_invalid_transform_results_recorded(fixture_project: tuple[Path, str]) -> None:
+    src_root, package_name = fixture_project
+    discovered = discover_functions(src_root)
+
+    result = apply_transforms(discovered)
+
+    assert any(
+        diagnostic.code == "SX008"
+        and diagnostic.module_name == f"{package_name}.jobs"
+        and diagnostic.qualname == "invalid_empty_job"
+        for diagnostic in result.diagnostics
+    )
+    assert any(
+        diagnostic.code == "SX008"
+        and diagnostic.module_name == f"{package_name}.jobs"
+        and diagnostic.qualname == "invalid_item_job"
         for diagnostic in result.diagnostics
     )

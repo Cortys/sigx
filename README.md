@@ -53,6 +53,25 @@ def add_kwargs_transform(ctx: TransformFactoryContext):
     return builder.build()
 ```
 
+Transform callbacks may also return multiple signatures (for overload generation):
+
+```python
+from sigx_gen.builder import SignatureBuilder
+from sigx_gen.transform_api import TransformContext
+
+
+def either_a_or_b(ctx: TransformContext):
+    with_a = SignatureBuilder.from_signature(ctx.original)
+    with_a.add_kwonly("a", annotation="Any", default="...")
+
+    with_b = SignatureBuilder.from_signature(ctx.original)
+    with_b.add_kwonly("b", annotation="Any", default="...")
+
+    return [with_a.build(), with_b.build()]
+```
+
+`sigx-gen` renders this as `@overload` entries in the generated `.pyi` output.
+
 ## CLI usage
 
 Generate inline `.pyi` files:
@@ -73,7 +92,6 @@ sigx-gen check --src-root src
 - nested functions are ignored
 - local reassignments and dynamic aliases are not resolved
 - only inline `.pyi` output (next to `.py`) is supported
-- transform callbacks must return a single `SignatureIR`
 
 ## Safety note
 
