@@ -78,8 +78,8 @@ def _install_fake_patcher(monkeypatch: pytest.MonkeyPatch, stub_root: Path) -> N
 def test_generate_writes_stubs(tmp_path: Path, monkeypatch) -> None:
     work_src = _copy_fixture_src(tmp_path)
 
-    def fake_basedpyright(*, src_root: Path, out_root: Path, module_names: object) -> None:
-        del src_root, module_names
+    def fake_basedpyright(*, src_root: Path, out_root: Path, module_targets: object) -> None:
+        del src_root, module_targets
         _write_baseline_jobs_stub(out_root)
 
     monkeypatch.setattr("sigx_gen.cli.generate_baseline_stubs", fake_basedpyright)
@@ -98,8 +98,8 @@ def test_generate_writes_stubs(tmp_path: Path, monkeypatch) -> None:
 def test_check_reports_mismatch_and_then_success(tmp_path: Path, monkeypatch) -> None:
     work_src = _copy_fixture_src(tmp_path)
 
-    def fake_basedpyright(*, src_root: Path, out_root: Path, module_names: object) -> None:
-        del src_root, module_names
+    def fake_basedpyright(*, src_root: Path, out_root: Path, module_targets: object) -> None:
+        del src_root, module_targets
         jobs_stub = out_root / "myproj" / "jobs.pyi"
         if not jobs_stub.exists():
             _write_baseline_jobs_stub(out_root)
@@ -129,3 +129,56 @@ def test_patch_updates_existing_stubs(tmp_path: Path, monkeypatch) -> None:
     assert "debug: Any = ..." in content
     assert "trace: Any = ..." in content
     assert "attempt: Any = ..." in content
+
+
+def test_generate_prunes_unplanned_stubs(tmp_path: Path, monkeypatch) -> None:
+    work_src = _copy_fixture_src(tmp_path)
+    _write_baseline_jobs_stub(work_src)
+    unplanned_stub = work_src / "myproj" / "unused.pyi"
+    unplanned_stub.write_text("def unused() -> None: ...\n", encoding="utf-8")
+
+    def fake_basedpyright(*, src_root: Path, out_root: Path, module_targets: object) -> None:
+        del src_root, out_root, module_targets
+
+    monkeypatch.setattr("sigx_gen.cli.generate_baseline_stubs", fake_basedpyright)
+    _install_fake_patcher(monkeypatch, work_src)
+
+    code = run_generate(
+        GenerationConfig(
+            src_root=work_src,
+            out_root=work_src,
+            check=False,
+            prune_unplanned=True,
+        )
+    )
+
+    assert code == 0
+    assert not unplanned_stub.exists()
+
+
+def test_generate_check_prune_reports_unplanned_as_drift(tmp_path: Path, monkeypatch) -> None:
+    work_src = _copy_fixture_src(tmp_path)
+    _write_patched_jobs_stub(work_src)
+    unplanned_stub = work_src / "myproj" / "unused.pyi"
+    unplanned_stub.write_text("def unused() -> None: ...\n", encoding="utf-8")
+
+    def fake_basedpyright(*, src_root: Path, out_root: Path, module_targets: object) -> None:
+        del src_root, module_targets
+        jobs_stub = out_root / "myproj" / "jobs.pyi"
+        if not jobs_stub.exists():
+            _write_patched_jobs_stub(out_root)
+
+    monkeypatch.setattr("sigx_gen.cli.generate_baseline_stubs", fake_basedpyright)
+    _install_fake_patcher(monkeypatch, work_src)
+
+    code = run_generate(
+        GenerationConfig(
+            src_root=work_src,
+            out_root=work_src,
+            check=True,
+            prune_unplanned=True,
+        )
+    )
+
+    assert code == 1
+    assert unplanned_stub.exists()

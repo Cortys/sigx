@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_parser = subparsers.add_parser("generate", help="Generate baseline stubs and patch transforms")
     _add_common_scope_args(generate_parser)
+    generate_parser.add_argument(
+        "--prune-unplanned",
+        action="store_true",
+        help="Remove .pyi files in out-root that are not part of the transform plan",
+    )
 
     patch_parser = subparsers.add_parser("patch", help="Patch existing stubs with transform plan")
     patch_parser.add_argument("--src-root", required=True, help="Source root to scan")
@@ -89,18 +94,29 @@ def run_generate(config: GenerationConfig) -> int:
         generate_baseline_stubs(
             src_root=config.src_root,
             out_root=config.out_root,
-            module_names=(module.module_name for module in plan.modules),
+            module_targets=((module.module_name, module.stub_file) for module in plan.modules),
         )
     except RuntimeError as exc:
         _write_stderr(f"error: {exc}")
         return 2
 
-    return _apply_plan(
+    patch_exit_code = _apply_plan(
         plan=plan,
         check=config.check,
         fail_on_errors=config.fail_on_errors,
         initial_diagnostics=diagnostics,
     )
+    if patch_exit_code == 2 or not config.prune_unplanned:
+        return patch_exit_code
+
+    prune_mismatches = _prune_unplanned_stubs(
+        out_root=config.out_root,
+        planned_stub_paths=tuple(module.stub_file for module in plan.modules),
+        check=config.check,
+    )
+    if config.check and prune_mismatches:
+        patch_exit_code = 1
+    return patch_exit_code
 
 
 def run_patch(config: PatchConfig) -> int:
@@ -209,6 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 src_root=src_root,
                 out_root=out_root,
                 check=args.check,
+                prune_unplanned=args.prune_unplanned,
                 fail_on_errors=args.fail_on_errors,
                 include=tuple(args.include),
                 exclude=tuple(args.exclude),
@@ -348,6 +365,33 @@ def _patch_result_exit_code(*, check: bool, mismatches: tuple[Path, ...]) -> int
 
 def _is_readable_dir(path: Path) -> bool:
     return path.exists() and path.is_dir()
+
+
+def _prune_unplanned_stubs(
+    *,
+    out_root: Path,
+    planned_stub_paths: tuple[Path, ...],
+    check: bool,
+) -> tuple[Path, ...]:
+    if not out_root.exists():
+        return ()
+
+    normalized_planned = {_normalize_path(path) for path in planned_stub_paths}
+    unplanned_paths = tuple(
+        sorted(path for path in out_root.rglob("*.pyi") if _normalize_path(path) not in normalized_planned)
+    )
+    if check:
+        for path in unplanned_paths:
+            _write_stderr(f"drift: {path}")
+        return unplanned_paths
+
+    for path in unplanned_paths:
+        path.unlink()
+    return ()
+
+
+def _normalize_path(path: Path) -> Path:
+    return path.resolve(strict=False)
 
 
 def _filter_modules(

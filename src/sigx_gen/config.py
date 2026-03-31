@@ -14,6 +14,7 @@ class GenerationConfig:
         src_root: Source root to scan for Python files.
         out_root: Output root for generated ``.pyi`` files.
         check: Whether to compare output without writing files.
+        prune_unplanned: Whether to remove non-plan ``.pyi`` files in ``out_root``.
         fail_on_errors: Whether error diagnostics should fail the run.
         include: Optional include glob filters relative to ``src_root``.
         exclude: Optional exclude glob filters relative to ``src_root``.
@@ -22,6 +23,7 @@ class GenerationConfig:
     src_root: Path
     out_root: Path
     check: bool = False
+    prune_unplanned: bool = False
     fail_on_errors: bool = False
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()

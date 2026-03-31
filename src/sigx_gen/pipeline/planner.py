@@ -5,11 +5,17 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from sigx_gen.emit.imports import collect_imported_names, collect_missing_module_imports
+from sigx_gen.emit.imports import (
+    collect_imported_names,
+    collect_missing_module_imports,
+    collect_signature_name_usage,
+)
 from sigx_gen.emit.render import render_signature
 from sigx_gen.model.plan import ModulePlan, SymbolPlan, TransformPlan
 from sigx_gen.model.symbols import DiscoveredModule
 from sigx_gen.pipeline.transformer import TransformedFunction
+
+_SYNTHESIZED_TYPING_SYMBOLS = {"Any", "Literal", "overload"}
 
 
 def build_transform_plan(
@@ -49,11 +55,7 @@ def build_transform_plan(
             for function in transformed
         )
 
-        typing_imports: list[str] = []
-        if any(any("Any" in signature for signature in symbol.rendered_signatures) for symbol in symbols):
-            typing_imports.append("Any")
-        if any(len(symbol.rendered_signatures) > 1 for symbol in symbols):
-            typing_imports.append("overload")
+        typing_imports = _collect_typing_imports(transformed, symbols)
 
         imported_names = collect_imported_names(module.import_statements)
         local_names = {variable.name for variable in module.variables}
@@ -72,9 +74,24 @@ def build_transform_plan(
                 module_name=module_name,
                 source_file=module.file_path,
                 stub_file=stub_file.with_suffix(".pyi"),
-                typing_imports=tuple(sorted(set(typing_imports))),
+                typing_imports=typing_imports,
                 module_imports=module_imports,
                 symbols=symbols,
             )
         )
     return TransformPlan(modules=tuple(module_plans))
+
+
+def _collect_typing_imports(
+    transformed_functions: list[TransformedFunction],
+    symbols: tuple[SymbolPlan, ...],
+) -> tuple[str, ...]:
+    imports: set[str] = set()
+    for function in transformed_functions:
+        for signature in function.signatures:
+            bare_names, _ = collect_signature_name_usage(signature)
+            imports.update(name for name in bare_names if name in _SYNTHESIZED_TYPING_SYMBOLS)
+
+    if any(len(symbol.rendered_signatures) > 1 for symbol in symbols):
+        imports.add("overload")
+    return tuple(sorted(imports))
