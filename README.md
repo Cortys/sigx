@@ -110,12 +110,6 @@ The plan+patch flow preserves key typing constructs:
 - function type parameters are preserved in emitted signatures (for example `def run[T](...) -> T`)
 - transformed signatures and overloads are rendered deterministically in decorator-application order
 
-Install optional patch dependency:
-
-```bash
-pip install "sigx[patch]"
-```
-
 ## v0.1 limitations
 
 - only simple decorator forms are supported: `@name`, `@module.name`, and call forms of each

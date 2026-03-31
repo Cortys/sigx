@@ -57,5 +57,5 @@ This document describes the current `sigx` runtime package and the restructured 
 
 - Generation imports and evaluates project code; use only on trusted codebases.
 - Decorator syntax support is intentionally minimal.
-- Patch backend depends on optional extra `sigx[patch]` (LibCST).
+- Patch backend depends on `libcst` as a default runtime dependency.
 - Baseline generation depends on `basedpyright`.

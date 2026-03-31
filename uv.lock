@@ -1548,10 +1548,6 @@ name = "sigx"
 source = { editable = "." }
 dependencies = [
     { name = "basedpyright" },
-]
-
-[package.optional-dependencies]
-patch = [
     { name = "libcst" },
 ]
 
@@ -1581,9 +1577,8 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "basedpyright", specifier = ">=1.31.4" },
-    { name = "libcst", marker = "extra == 'patch'", specifier = ">=1.6.0" },
+    { name = "libcst", specifier = ">=1.6.0" },
 ]
-provides-extras = ["patch"]
 
 [package.metadata.requires-dev]
 dev = [
