@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 def generate_baseline_stubs(
@@ -30,26 +32,47 @@ def generate_baseline_stubs(
     if not top_level_packages:
         return
 
-    for package in top_level_packages:
-        command = _basedpyright_command(package=package, out_root=out_root)
-        try:
-            result = subprocess.run(  # noqa: S603
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env={**os.environ, "PYTHONPATH": str(src_root)},
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError("basedpyright is not installed. Install it with 'pip install basedpyright'.") from exc
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"basedpyright stub generation failed for '{package}': {(result.stderr or result.stdout).strip()}"
-            )
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="sigx-gen-basedpyright-") as temp_dir:
+        project_file = Path(temp_dir) / "pyrightconfig.json"
+        _write_project_config(project_file=project_file, src_root=src_root, out_root=out_root)
+
+        for package in top_level_packages:
+            command = _basedpyright_command(package=package, project_file=project_file)
+            try:
+                result = subprocess.run(  # noqa: S603
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "PYTHONPATH": str(src_root)},
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "basedpyright is not installed. Install it with 'pip install basedpyright'."
+                ) from exc
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"basedpyright stub generation failed for '{package}': {(result.stderr or result.stdout).strip()}"
+                )
 
 
-def _basedpyright_command(*, package: str, out_root: Path) -> list[str]:
+def _basedpyright_command(*, package: str, project_file: Path) -> list[str]:
     if shutil.which("basedpyright") is not None:
-        executable = "basedpyright"
-        return [executable, "--createstub", package, "--output", str(out_root)]
-    return [sys.executable, "-m", "basedpyright", "--createstub", package, "--output", str(out_root)]
+        return ["basedpyright", "--project", str(project_file), "--createstub", package]
+    return [sys.executable, "-m", "basedpyright", "--project", str(project_file), "--createstub", package]
+
+
+def _write_project_config(*, project_file: Path, src_root: Path, out_root: Path) -> None:
+    config = {
+        "include": [str(src_root)],
+        "stubPath": str(out_root),
+        "executionEnvironments": [
+            {
+                "root": str(src_root),
+                "extraPaths": [str(src_root)],
+            }
+        ],
+    }
+    project_file.write_text(json.dumps(config), encoding="utf-8")
