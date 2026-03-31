@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sigx_gen.builder import SignatureBuilder
-from sigx_gen.signature_ir import ParamKind, SignatureIR, SigParam
+from sigx_gen.model.signature import ParamKind, SignatureIR, SigParam
 
 
 def _base_signature(*params: SigParam) -> SignatureIR:

@@ -5,7 +5,7 @@
 It is split into two packages:
 
 - `sigx`: tiny runtime marker decorators
-- `sigx-gen`: generator that scans source code, imports modules, evaluates decorator factory arguments, applies registered transforms, and emits stubs
+- `sigx-gen`: generator that scans source code, evaluates decorator transforms, and patches baseline stubs
 
 ## Basic example
 
@@ -43,7 +43,7 @@ def run_job(name: str, *, debug: Any = ..., trace: Any = ...) -> None: ...
 
 ```python
 from sigx_gen.builder import SignatureBuilder
-from sigx_gen.transform_api import TransformFactoryContext
+from sigx_gen.model.transform_api import TransformFactoryContext
 
 
 def add_kwargs_transform(ctx: TransformFactoryContext):
@@ -57,7 +57,7 @@ Transform callbacks may also return multiple signatures (for overload generation
 
 ```python
 from sigx_gen.builder import SignatureBuilder
-from sigx_gen.transform_api import TransformContext
+from sigx_gen.model.transform_api import TransformContext
 
 
 def either_a_or_b(ctx: TransformContext):
@@ -70,33 +70,45 @@ def either_a_or_b(ctx: TransformContext):
     return [with_a.build(), with_b.build()]
 ```
 
-`sigx-gen` renders this as `@overload` entries in the generated `.pyi` output.
+`sigx-gen` applies this as multiple overload signatures during patching.
 
 ## CLI usage
 
-### Standalone backend (module-complete stubs)
-
-Generate inline `.pyi` files:
+Generate baseline stubs and patch transforms in one command:
 
 ```bash
 sigx-gen generate --src-root src
 ```
 
-Check for drift without writing files:
+Patch existing stubs without regenerating the baseline:
 
 ```bash
-sigx-gen check --src-root src
+sigx-gen patch --src-root src --stub-root stubs
 ```
 
-When a module contains at least one transformed function, `sigx-gen` emits a module-complete stub for that module (including undecorated top-level functions and discovered methods). Modules without transformed functions are skipped.
+Check drift without writing:
 
-Standalone generation also preserves key typing constructs:
+```bash
+sigx-gen patch --src-root src --stub-root stubs --check
+```
+
+Split planning/applying for CI or custom pipelines:
+
+```bash
+sigx-gen plan --src-root src --stub-root stubs --plan-out sigx-plan.json
+sigx-gen apply --plan sigx-plan.json
+```
+
+Filter scope and fail hard on transform errors:
+
+```bash
+sigx-gen generate --src-root src --include "pkg/**" --exclude "**/legacy/**" --fail-on-errors
+```
+
+The plan+patch flow preserves key typing constructs:
 
 - function type parameters are preserved in emitted signatures (for example `def run[T](...) -> T`)
-- imports found under top-level `TYPE_CHECKING` guards are included in stub import synthesis
 - transformed signatures and overloads are rendered deterministically in decorator-application order
-
-### Patch backend (integrate with existing stub pipelines)
 
 Install optional patch dependency:
 
@@ -104,30 +116,16 @@ Install optional patch dependency:
 pip install "sigx[patch]"
 ```
 
-Generate and patch existing stubs in one step (no temporary plan file):
-
-```bash
-sigx-gen generate --src-root src --out-root stubs --backend patch
-```
-
-Or split into explicit plan/apply stages:
-
-```bash
-sigx-gen plan --src-root src --stub-root stubs --plan-out sigx-plan.json
-sigx-gen apply --plan sigx-plan.json
-```
-
 ## v0.1 limitations
 
 - only simple decorator forms are supported: `@name`, `@module.name`, and call forms of each
 - nested functions are ignored
 - local reassignments and dynamic aliases are not resolved
-- patch backend currently targets top-level functions and class methods
-- type-only import discovery is limited to top-level `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` blocks
+- patching currently targets top-level functions and class methods
 
 ## Safety note
 
-Generation imports and evaluates project code, including decorator factory arguments. Run `sigx-gen` only on trusted codebases.
+Planning imports and evaluates project code, including decorator factory arguments. Run `sigx-gen` only on trusted codebases.
 
 ## Contributor notes
 

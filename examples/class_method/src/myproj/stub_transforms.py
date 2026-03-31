@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from sigx_gen.builder import SignatureBuilder
-from sigx_gen.transform_api import TransformFactoryContext
+from sigx_gen.model.transform_api import TransformFactoryContext
 
 
 def add_kwargs_transform(ctx: TransformFactoryContext):

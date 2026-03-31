@@ -9,8 +9,12 @@ import uuid
 import pytest
 
 from sigx_gen.model.signature import ParamKind
-from sigx_gen.pipeline.discovery import discover_functions
+from sigx_gen.pipeline.discovery import discover_modules
 from sigx_gen.pipeline.transformer import apply_transforms
+
+
+def _discover_functions(src_root: Path):
+    return tuple(function for module in discover_modules(src_root) for function in module.functions)
 
 
 @pytest.fixture
@@ -127,7 +131,7 @@ def fixture_project(tmp_path: Path) -> Iterator[tuple[Path, str]]:
 
 def test_plain_decorator_transform_applied(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
     signatures = {
@@ -143,7 +147,7 @@ def test_plain_decorator_transform_applied(fixture_project: tuple[Path, str]) ->
 
 def test_decorator_factory_transform_applied(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
     signatures = {
@@ -156,7 +160,7 @@ def test_decorator_factory_transform_applied(fixture_project: tuple[Path, str]) 
 
 def test_multiple_transforms_apply_in_source_order(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
     ordered = {
@@ -169,7 +173,7 @@ def test_multiple_transforms_apply_in_source_order(fixture_project: tuple[Path, 
 
 def test_cross_product_branching_respects_bottom_to_top_order(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
     branched = {
@@ -185,7 +189,7 @@ def test_cross_product_branching_respects_bottom_to_top_order(fixture_project: t
 
 def test_decorator_without_metadata_is_ignored(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
     function_names = {item.function_name for item in result.functions if item.module_name == f"{package_name}.jobs"}
@@ -195,7 +199,7 @@ def test_decorator_without_metadata_is_ignored(fixture_project: tuple[Path, str]
 
 def test_transform_callback_failure_recorded(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
 
@@ -209,7 +213,7 @@ def test_transform_callback_failure_recorded(fixture_project: tuple[Path, str]) 
 
 def test_invalid_transform_results_recorded(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
-    discovered = discover_functions(src_root)
+    discovered = _discover_functions(src_root)
 
     result = apply_transforms(discovered)
 

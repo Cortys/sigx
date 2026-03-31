@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from sigx_gen.model.signature import ParamKind, SignatureIR, SigParam
 
 
@@ -40,18 +38,6 @@ def render_signature(sig: SignatureIR) -> str:
         type_params_prefix = f"[{', '.join(sig.type_params)}]"
     return_annotation = sig.return_annotation or "Any"
     return f"{type_params_prefix}({', '.join(tokens)}) -> {return_annotation}"
-
-
-def needs_any_import(rendered_signatures: Iterable[str]) -> bool:
-    """Determine if a module stub should import ``Any``.
-
-    Args:
-        rendered_signatures: Rendered signature strings.
-
-    Returns:
-        ``True`` when the text contains ``Any``.
-    """
-    return any("Any" in signature for signature in rendered_signatures)
 
 
 def _render_param(param: SigParam) -> str:

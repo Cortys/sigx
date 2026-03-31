@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sigx_gen.builder import SignatureBuilder
-from sigx_gen.transform_api import TransformContext
+from sigx_gen.model.transform_api import TransformContext
 
 
 def add_audit_flag(ctx: TransformContext):

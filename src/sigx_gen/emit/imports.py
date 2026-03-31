@@ -93,29 +93,6 @@ def collect_signature_name_usage(signature: SignatureIR) -> tuple[set[str], set[
     return bare_names, dotted_roots
 
 
-def collect_unresolved_annotation_names(
-    signature: SignatureIR,
-    *,
-    imported_names: set[str],
-    local_symbol_names: set[str],
-) -> tuple[str, ...]:
-    """Collect unresolved names referenced by a signature.
-
-    Args:
-        signature: Signature to inspect.
-        imported_names: Locally available imported names.
-        local_symbol_names: Locally defined module names.
-
-    Returns:
-        Sorted tuple of unresolved names.
-    """
-    bare_names, dotted_roots = collect_signature_name_usage(signature)
-    type_param_names = {name for type_param in signature.type_params for name in _extract_type_param_names(type_param)}
-    blocked = imported_names | local_symbol_names | _BUILTIN_NAMES | {"typing"} | type_param_names
-    unresolved = {name for name in bare_names | dotted_roots if name not in blocked}
-    return tuple(sorted(unresolved))
-
-
 def _extract_type_param_names(type_param_decl: str) -> set[str]:
     decl = type_param_decl.strip()
     if decl.startswith("**"):

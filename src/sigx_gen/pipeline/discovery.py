@@ -56,21 +56,6 @@ def discover_modules(src_root: Path) -> tuple[DiscoveredModule, ...]:
     return tuple(modules)
 
 
-def discover_functions(src_root: Path) -> tuple[DiscoveredFunction, ...]:
-    """Discover top-level functions and class methods under a source root.
-
-    Args:
-        src_root: Root path containing Python source files.
-
-    Returns:
-        Discovered function records in deterministic order.
-    """
-    functions: list[DiscoveredFunction] = []
-    for module in discover_modules(src_root):
-        functions.extend(module.functions)
-    return tuple(functions)
-
-
 def extract_signature_from_node(node: ast.FunctionDef | ast.AsyncFunctionDef) -> SignatureIR:
     """Extract immutable signature IR from a function AST node.
 

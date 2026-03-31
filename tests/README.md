@@ -10,7 +10,7 @@ Tests are organized to mirror the package structure.
 Examples:
 
 - `src/sigx_gen/pipeline/discovery.py` -> `tests/sigx_gen/pipeline/test_discovery.py`
-- `src/sigx_gen/emit/standalone.py` -> `tests/sigx_gen/emit/test_standalone.py`
+- `src/sigx_gen/emit/patch_libcst.py` -> `tests/sigx_gen/emit/test_patch_libcst.py`
 - `src/sigx/runtime.py` -> `tests/sigx/test_runtime.py`
 
 ## Broader integration tests

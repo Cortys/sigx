@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sigx_gen.emit.render import needs_any_import, render_signature
+from sigx_gen.emit.render import render_signature
 from sigx_gen.model.signature import ParamKind, SignatureIR, SigParam
 
 
@@ -57,11 +57,6 @@ def test_render_kw_only_before_kwargs() -> None:
 def test_render_return_annotation() -> None:
     sig = SignatureIR(params=(SigParam("x", ParamKind.POS_OR_KW, "int", None),), return_annotation="str")
     assert render_signature(sig) == "(x: int) -> str"
-
-
-def test_any_import_detection() -> None:
-    assert needs_any_import(["(x: int) -> None", "(x: Any) -> None"])
-    assert not needs_any_import(["(x: int) -> None"])
 
 
 def test_render_with_type_params() -> None:

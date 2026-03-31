@@ -9,7 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import cast
 
-from sigx.model import TransformKind
+from sigx.model import TransformKind, TransformMetadata
 from sigx_gen.model.diagnostics import Diagnostic, DiagnosticLevel
 from sigx_gen.model.signature import SignatureIR
 from sigx_gen.model.symbols import DiscoveredFunction
@@ -22,9 +22,21 @@ from sigx_gen.model.transform_api import (
     TransformFactoryContext,
 )
 from sigx_gen.pipeline.discovery import extract_signature_from_node
-from sigx_gen.pipeline.evaluator import DecoratorEvaluationError, evaluate_factory_arguments
+from sigx_gen.pipeline.evaluator import (
+    DecoratorEvaluationError,
+    evaluate_factory_arguments,
+    evaluate_factory_arguments_literal_only,
+)
 from sigx_gen.pipeline.loader import load_module, load_transform_callable, load_transform_metadata
 from sigx_gen.pipeline.resolver import resolve_decorator
+from sigx_gen.pipeline.static_markers import (
+    StaticMarkerMetadata,
+    bind_factory_args_static,
+    build_static_marker_index,
+    lookup_static_marker,
+)
+
+_IGNORED_BUILTIN_DECORATORS = {"classmethod", "staticmethod", "property"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,11 +75,16 @@ class TransformerResult:
     diagnostics: tuple[Diagnostic, ...]
 
 
-def apply_transforms(discovered_functions: tuple[DiscoveredFunction, ...]) -> TransformerResult:
+def apply_transforms(
+    discovered_functions: tuple[DiscoveredFunction, ...],
+    *,
+    module_files: dict[str, Path] | None = None,
+) -> TransformerResult:
     """Apply registered transforms to discovered functions.
 
     Args:
         discovered_functions: Functions discovered from source scanning.
+        module_files: Optional discovered module->file mapping for import fallback.
 
     Returns:
         Engine output containing transformed signatures and diagnostics.
@@ -75,6 +92,8 @@ def apply_transforms(discovered_functions: tuple[DiscoveredFunction, ...]) -> Tr
     transformed: list[TransformedFunction] = []
     diagnostics: list[Diagnostic] = []
     module_cache: dict[str, ModuleType] = {}
+    known_module_files = module_files or {f.module_name: f.file_path for f in discovered_functions}
+    static_markers = build_static_marker_index(discovered_functions)
 
     for function in discovered_functions:
         current_signatures: tuple[SignatureIR, ...] = (extract_signature_from_node(function.node),)
@@ -82,12 +101,16 @@ def apply_transforms(discovered_functions: tuple[DiscoveredFunction, ...]) -> Tr
         applied_any_transform = False
 
         for decorator_expr in reversed(function.decorators):
+            if _is_ignored_builtin_decorator(decorator_expr):
+                continue
             did_apply, current_signatures = _apply_decorator_application(
                 function=function,
                 decorator_expr=decorator_expr,
                 target=target,
                 current_signatures=current_signatures,
                 module_cache=module_cache,
+                module_files=known_module_files,
+                static_markers=static_markers,
                 diagnostics=diagnostics,
             )
             applied_any_transform = applied_any_transform or did_apply
@@ -115,6 +138,8 @@ def _apply_decorator_application(  # noqa: PLR0911
     target: TargetInfo,
     current_signatures: tuple[SignatureIR, ...],
     module_cache: dict[str, ModuleType],
+    module_files: dict[str, Path],
+    static_markers: dict[tuple[str, str], StaticMarkerMetadata],
     diagnostics: list[Diagnostic],
 ) -> tuple[bool, tuple[SignatureIR, ...]]:
     resolved, resolver_diagnostics = resolve_decorator(
@@ -137,38 +162,26 @@ def _apply_decorator_application(  # noqa: PLR0911
         )
         return False, current_signatures
 
-    try:
-        decorator_module = _load_cached_module(resolved.module_name, module_cache)
-    except Exception as exc:  # noqa: BLE001
-        diagnostics.append(
-            _diagnostic(
-                code="SX003",
-                message=f"Failed to import module '{resolved.module_name}': {exc}",
-                function=function,
-                level=DiagnosticLevel.ERROR,
-            )
-        )
-        return False, current_signatures
+    static_marker = lookup_static_marker(
+        static_markers,
+        module_name=resolved.module_name,
+        object_name=resolved.object_name,
+    )
 
-    try:
-        decorator_object = _resolve_object_path(decorator_module, resolved.object_name)
-    except AttributeError as exc:
-        diagnostics.append(
-            _diagnostic(
-                code="SX001",
-                message=f"Failed to resolve decorator object '{resolved.object_name}': {exc}",
-                function=function,
-                level=DiagnosticLevel.WARNING,
-            )
-        )
-        return False, current_signatures
-
-    metadata = load_transform_metadata(decorator_object)
+    metadata, decorator_object = _resolve_transform_metadata(
+        resolved_module_name=resolved.module_name,
+        resolved_object_name=resolved.object_name,
+        static_marker=static_marker,
+        module_cache=module_cache,
+        module_files=module_files,
+        function=function,
+        diagnostics=diagnostics,
+    )
     if metadata is None:
         return False, current_signatures
 
     try:
-        transform_callable = load_transform_callable(metadata.ref)
+        transform_callable = load_transform_callable(metadata.ref, module_files=module_files)
     except Exception as exc:  # noqa: BLE001
         diagnostics.append(
             _diagnostic(
@@ -209,16 +222,6 @@ def _apply_decorator_application(  # noqa: PLR0911
             return False, current_signatures
         return True, maybe_updated
 
-    if not callable(decorator_object):
-        diagnostics.append(
-            _diagnostic(
-                code="SX006",
-                message="Resolved decorator factory object is not callable",
-                function=function,
-                level=DiagnosticLevel.ERROR,
-            )
-        )
-        return False, current_signatures
     if not isinstance(decorator_expr, ast.Call):
         diagnostics.append(
             _diagnostic(
@@ -230,28 +233,50 @@ def _apply_decorator_application(  # noqa: PLR0911
         )
         return False, current_signatures
 
-    try:
-        decorated_module = _load_cached_module(function.module_name, module_cache)
-        bound_args = evaluate_factory_arguments(
-            decorated_module,
-            decorator_expr,
-            cast("Callable[..., object]", decorator_object),
-        )
-    except DecoratorEvaluationError as exc:
+    bound_args: BoundArgumentsView | None = None
+    runtime_eval_exception: Exception | None = None
+    if callable(decorator_object):
+        try:
+            decorated_module = _load_cached_module(
+                function.module_name,
+                module_cache,
+                module_files=module_files,
+            )
+            bound_args = evaluate_factory_arguments(
+                decorated_module,
+                decorator_expr,
+                cast("Callable[..., object]", decorator_object),
+            )
+        except Exception as exc:  # noqa: BLE001
+            runtime_eval_exception = exc
+            if callable(decorator_object):
+                try:
+                    bound_args = evaluate_factory_arguments_literal_only(
+                        decorator_expr,
+                        cast("Callable[..., object]", decorator_object),
+                    )
+                except DecoratorEvaluationError:
+                    bound_args = None
+
+    if bound_args is None and static_marker is not None:
+        try:
+            bound_args = BoundArgumentsView(
+                arguments=bind_factory_args_static(
+                    definition=static_marker.definition,
+                    decorator_call=decorator_expr,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            runtime_eval_exception = exc
+
+    if bound_args is None:
+        message = "Decorator factory argument evaluation failed"
+        if runtime_eval_exception is not None:
+            message = f"Decorator factory argument evaluation failed: {runtime_eval_exception}"
         diagnostics.append(
             _diagnostic(
                 code="SX006",
-                message=f"Decorator factory argument evaluation failed: {exc}",
-                function=function,
-                level=DiagnosticLevel.ERROR,
-            )
-        )
-        return False, current_signatures
-    except Exception as exc:  # noqa: BLE001
-        diagnostics.append(
-            _diagnostic(
-                code="SX003",
-                message=f"Failed to import decorated module '{function.module_name}': {exc}",
+                message=message,
                 function=function,
                 level=DiagnosticLevel.ERROR,
             )
@@ -453,10 +478,62 @@ def _resolve_object_path(module: ModuleType, object_name: str) -> object:
     return obj
 
 
-def _load_cached_module(module_name: str, cache: dict[str, ModuleType]) -> ModuleType:
+def _load_cached_module(
+    module_name: str,
+    cache: dict[str, ModuleType],
+    *,
+    module_files: dict[str, Path],
+) -> ModuleType:
     if module_name not in cache:
-        cache[module_name] = load_module(module_name)
+        cache[module_name] = load_module(module_name, module_files=module_files)
     return cache[module_name]
+
+
+def _resolve_transform_metadata(
+    *,
+    resolved_module_name: str,
+    resolved_object_name: str,
+    static_marker: StaticMarkerMetadata | None,
+    module_cache: dict[str, ModuleType],
+    module_files: dict[str, Path],
+    function: DiscoveredFunction,
+    diagnostics: list[Diagnostic],
+) -> tuple[TransformMetadata | None, object | None]:
+    runtime_metadata: TransformMetadata | None = None
+    decorator_object: object | None = None
+    runtime_error: Exception | None = None
+
+    try:
+        decorator_module = _load_cached_module(
+            resolved_module_name,
+            module_cache,
+            module_files=module_files,
+        )
+        decorator_object = _resolve_object_path(decorator_module, resolved_object_name)
+        runtime_metadata = load_transform_metadata(decorator_object)
+    except Exception as exc:  # noqa: BLE001
+        runtime_error = exc
+
+    if runtime_metadata is not None:
+        return runtime_metadata, decorator_object
+    if static_marker is not None:
+        if runtime_error is not None:
+            diagnostics.append(
+                _diagnostic(
+                    code="SX010",
+                    message=f"Using static marker fallback after runtime lookup failed: {runtime_error}",
+                    function=function,
+                    level=DiagnosticLevel.INFO,
+                )
+            )
+        return static_marker.metadata, decorator_object
+
+    return None, decorator_object
+
+
+def _is_ignored_builtin_decorator(decorator_expr: ast.expr) -> bool:
+    candidate = decorator_expr.func if isinstance(decorator_expr, ast.Call) else decorator_expr
+    return isinstance(candidate, ast.Name) and candidate.id in _IGNORED_BUILTIN_DECORATORS
 
 
 def _contextualize(function: DiscoveredFunction, diagnostics: tuple[Diagnostic, ...]) -> list[Diagnostic]:

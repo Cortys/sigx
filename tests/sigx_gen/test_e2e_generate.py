@@ -6,9 +6,24 @@ import shutil
 import sys
 import uuid
 
-from sigx_gen.emit.standalone import render_standalone_outputs, write_outputs
+from sigx_gen.model.plan import TransformPlan
 from sigx_gen.pipeline.discovery import discover_modules
+from sigx_gen.pipeline.planner import build_transform_plan
 from sigx_gen.pipeline.transformer import apply_transforms
+
+
+def _build_transform_plan(src_root: Path, *, stub_root: Path) -> TransformPlan:
+    sys.path.insert(0, str(src_root))
+    importlib.invalidate_caches()
+    try:
+        modules = discover_modules(src_root)
+        discovered = tuple(function for module in modules for function in module.functions)
+        transformed = apply_transforms(discovered)
+    finally:
+        if str(src_root) in sys.path:
+            sys.path.remove(str(src_root))
+
+    return build_transform_plan(modules, transformed.functions, src_root=src_root, stub_root=stub_root)
 
 
 def test_e2e_generate_fixture_project(tmp_path: Path) -> None:
@@ -16,33 +31,18 @@ def test_e2e_generate_fixture_project(tmp_path: Path) -> None:
     work_src = tmp_path / "src"
     shutil.copytree(fixture_root, work_src)
 
-    sys.path.insert(0, str(work_src))
-    importlib.invalidate_caches()
-    try:
-        modules = discover_modules(work_src)
-        discovered = tuple(function for module in modules for function in module.functions)
-        result = apply_transforms(discovered)
-        outputs = render_standalone_outputs(modules, result.functions, src_root=work_src, out_root=work_src)
-        write_outputs(outputs)
-    finally:
-        if str(work_src) in sys.path:
-            sys.path.remove(str(work_src))
+    plan = _build_transform_plan(work_src, stub_root=work_src)
 
-    jobs_stub_path = work_src / "myproj" / "jobs.pyi"
-    assert jobs_stub_path.exists()
-    assert jobs_stub_path.read_text(encoding="utf-8") == (
-        "from __future__ import annotations\n\n"
-        "from myproj.decorators import add_kwargs\n\n"
-        "from typing import Any\n\n"
-        "MAX_RETRIES: int\n\n"
-        "def run_job(name: str, *, debug: Any = ..., trace: Any = ...) -> None: ...\n\n"
-        "def helper(payload: Payload) -> int: ...\n\n"
-        "class Payload: ...\n\n"
-        "class Worker:\n"
-        "    def process(self, name: str, *, attempt: Any = ...) -> None: ...\n\n"
-        "    def ping(self, payload: Payload) -> int: ...\n"
-    )
-    assert not (work_src / "myproj" / "util.pyi").exists()
+    assert len(plan.modules) == 1
+    module_plan = plan.modules[0]
+    assert module_plan.module_name == "myproj.jobs"
+    assert module_plan.typing_imports == ("Any",)
+    assert module_plan.module_imports == ()
+    symbol_signatures = {symbol.qualname: symbol.rendered_signatures for symbol in module_plan.symbols}
+    assert symbol_signatures == {
+        "Worker.process": ("(self, name: str, *, attempt: Any = ...) -> None",),
+        "run_job": ("(name: str, *, debug: Any = ..., trace: Any = ...) -> None",),
+    }
 
 
 def test_e2e_generate_overloads_from_branching_transform(tmp_path: Path) -> None:
@@ -92,27 +92,16 @@ def test_e2e_generate_overloads_from_branching_transform(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    sys.path.insert(0, str(src_root))
-    importlib.invalidate_caches()
-    try:
-        modules = discover_modules(src_root)
-        discovered = tuple(function for module in modules for function in module.functions)
-        result = apply_transforms(discovered)
-        outputs = render_standalone_outputs(modules, result.functions, src_root=src_root, out_root=src_root)
-        write_outputs(outputs)
-    finally:
-        if str(src_root) in sys.path:
-            sys.path.remove(str(src_root))
+    plan = _build_transform_plan(src_root, stub_root=src_root)
 
-    jobs_stub_path = src_root / package_name / "jobs.pyi"
-    assert jobs_stub_path.read_text(encoding="utf-8") == (
-        f"from {package_name}.decorators import add_trace\n\n"
-        f"from {package_name}.decorators import either_ab\n\n"
-        "from typing import Any, overload\n\n"
-        "@overload\n"
-        "def run(name: str, *, a: Any = ..., trace: Any = ...) -> None: ...\n"
-        "@overload\n"
-        "def run(name: str, *, b: Any = ..., trace: Any = ...) -> None: ...\n"
+    assert len(plan.modules) == 1
+    module_plan = plan.modules[0]
+    assert module_plan.module_name == f"{package_name}.jobs"
+    assert module_plan.typing_imports == ("Any", "overload")
+    assert module_plan.symbols[0].qualname == "run"
+    assert module_plan.symbols[0].rendered_signatures == (
+        "(name: str, *, a: Any = ..., trace: Any = ...) -> None",
+        "(name: str, *, b: Any = ..., trace: Any = ...) -> None",
     )
 
 
@@ -151,24 +140,12 @@ def test_e2e_generate_adds_missing_root_import_for_dotted_annotation(tmp_path: P
         encoding="utf-8",
     )
 
-    sys.path.insert(0, str(src_root))
-    importlib.invalidate_caches()
-    try:
-        modules = discover_modules(src_root)
-        discovered = tuple(function for module in modules for function in module.functions)
-        result = apply_transforms(discovered)
-        outputs = render_standalone_outputs(modules, result.functions, src_root=src_root, out_root=src_root)
-        write_outputs(outputs)
-    finally:
-        if str(src_root) in sys.path:
-            sys.path.remove(str(src_root))
+    plan = _build_transform_plan(src_root, stub_root=src_root)
 
-    jobs_stub_path = src_root / package_name / "jobs.pyi"
-    assert jobs_stub_path.read_text(encoding="utf-8") == (
-        f"from {package_name}.decorators import add_c\n\n"
-        "import pkga\n\n"
-        "def run(name: str, *, c: pkga.b.C = ...) -> None: ...\n"
-    )
+    assert len(plan.modules) == 1
+    module_plan = plan.modules[0]
+    assert module_plan.module_imports == ("pkga",)
+    assert module_plan.symbols[0].rendered_signatures == ("(name: str, *, c: pkga.b.C = ...) -> None",)
 
 
 def test_e2e_generate_preserves_generic_type_params(tmp_path: Path) -> None:
@@ -207,24 +184,12 @@ def test_e2e_generate_preserves_generic_type_params(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    sys.path.insert(0, str(src_root))
-    importlib.invalidate_caches()
-    try:
-        modules = discover_modules(src_root)
-        discovered = tuple(function for module in modules for function in module.functions)
-        result = apply_transforms(discovered)
-        outputs = render_standalone_outputs(modules, result.functions, src_root=src_root, out_root=src_root)
-        write_outputs(outputs)
-    finally:
-        if str(src_root) in sys.path:
-            sys.path.remove(str(src_root))
+    plan = _build_transform_plan(src_root, stub_root=src_root)
 
-    jobs_stub_path = src_root / package_name / "jobs.pyi"
-    assert jobs_stub_path.read_text(encoding="utf-8") == (
-        f"from {package_name}.decorators import add_flag\n\n"
-        "from typing import Any\n\n"
-        "def run[T](value: T, *, flag: Any = ...) -> T: ...\n"
-    )
+    assert len(plan.modules) == 1
+    module_plan = plan.modules[0]
+    assert module_plan.typing_imports == ("Any",)
+    assert module_plan.symbols[0].rendered_signatures == ("[T](value: T, *, flag: Any = ...) -> T",)
 
 
 def test_e2e_generate_type_checking_imports_survive(tmp_path: Path) -> None:
@@ -270,22 +235,10 @@ def test_e2e_generate_type_checking_imports_survive(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    sys.path.insert(0, str(src_root))
-    importlib.invalidate_caches()
-    try:
-        modules = discover_modules(src_root)
-        discovered = tuple(function for module in modules for function in module.functions)
-        result = apply_transforms(discovered)
-        outputs = render_standalone_outputs(modules, result.functions, src_root=src_root, out_root=src_root)
-        write_outputs(outputs)
-    finally:
-        if str(src_root) in sys.path:
-            sys.path.remove(str(src_root))
+    plan = _build_transform_plan(src_root, stub_root=src_root)
 
-    jobs_stub_path = src_root / package_name / "jobs.pyi"
-    assert jobs_stub_path.read_text(encoding="utf-8") == (
-        "from typing import TYPE_CHECKING\n\n"
-        f"from {package_name}.decorators import add_debug\n\n"
-        "from external.types import Model\n\n"
-        "def run(model: Model, *, debug: bool = False) -> None: ...\n"
-    )
+    assert len(plan.modules) == 1
+    module_plan = plan.modules[0]
+    assert module_plan.typing_imports == ()
+    assert module_plan.module_imports == ()
+    assert module_plan.symbols[0].rendered_signatures == ("(model: Model, *, debug: bool = False) -> None",)

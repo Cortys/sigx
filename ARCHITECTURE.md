@@ -20,7 +20,9 @@ This document describes the current `sigx` runtime package and the restructured 
 - `src/sigx_gen/pipeline/`
   - Source analysis and transform execution: discovery, resolver, loader, evaluator, transformer, planner.
 - `src/sigx_gen/emit/`
-  - Output backends: standalone file emission, patch backend interfaces, LibCST patch backend, render/import helpers.
+  - Patch backend interfaces and implementation plus signature/import rendering helpers.
+- `src/sigx_gen/bootstrap/`
+  - Baseline stub bootstrap (`basedpyright`) used by `generate`.
 - `src/sigx_gen/io/`
   - Serialized artifact I/O (`TransformPlan` JSON).
 - `src/sigx_gen/*.py`
@@ -33,21 +35,22 @@ This document describes the current `sigx` runtime package and the restructured 
    - Collects module imports, top-level variables, class names, and functions/methods.
 
 2. `pipeline.transformer.apply_transforms(discovered_functions)`
-   - Applies decorator transforms in decorator-application order (bottom-to-top).
-   - Supports single or multi-signature transform results.
-   - Multi-signature outputs branch via cross-product semantics.
+    - Applies decorator transforms in decorator-application order (bottom-to-top).
+    - Supports single or multi-signature transform results.
+    - Multi-signature outputs branch via cross-product semantics.
+   - Uses static marker fallback when runtime decorator import/metadata lookup fails.
 
-3. Backend-specific emission
-   - **Standalone backend** (`emit.standalone`):
-     - emits `.pyi` only for modules containing at least one transformed symbol,
-     - emits module-complete stubs for those modules (decorated + undecorated discovered functions/methods, discovered classes, discovered variables).
-   - **Patch backend** (`emit.patch_libcst`):
-     - builds a transform plan (`pipeline.planner`),
-     - patches existing stubs structurally via LibCST.
+3. Plan construction
+   - `pipeline.planner.build_transform_plan(...)`
+   - Converts transformed signatures into serialized symbol/module patch intents.
 
-4. `cli.py` orchestration
-   - `generate` / `check` with `--backend standalone|patch`
-   - `plan` / `apply` for explicit plan-driven integration workflows
+4. Stub update
+   - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, then patch using LibCST backend.
+   - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans.
+
+5. `cli.py` orchestration
+   - `generate`, `patch`, `plan`, `apply`
+   - `--check`, `--fail-on-errors`, `--include`, `--exclude` supported where applicable
    - Exit codes: `0` success, `1` check mismatch, `2` unrecoverable error.
 
 ## Design constraints
@@ -55,3 +58,4 @@ This document describes the current `sigx` runtime package and the restructured 
 - Generation imports and evaluates project code; use only on trusted codebases.
 - Decorator syntax support is intentionally minimal.
 - Patch backend depends on optional extra `sigx[patch]` (LibCST).
+- Baseline generation depends on `basedpyright`.

@@ -51,6 +51,39 @@ def evaluate_factory_arguments(
     return BoundArgumentsView(arguments=dict(bound.arguments))
 
 
+def evaluate_factory_arguments_literal_only(
+    decorator_call: ast.Call,
+    factory_callable: Callable[..., object],
+) -> BoundArgumentsView:
+    """Evaluate factory arguments using literal expressions only.
+
+    Args:
+        decorator_call: Decorator call AST node.
+        factory_callable: Decorator factory callable.
+
+    Returns:
+        Bound argument view for transform context usage.
+
+    Raises:
+        DecoratorEvaluationError: If arguments are non-literal or binding fails.
+    """
+    try:
+        positional_args = [ast.literal_eval(expr) for expr in decorator_call.args]
+        keyword_args: dict[str, object] = {}
+        for keyword in decorator_call.keywords:
+            if keyword.arg is None:
+                raise DecoratorEvaluationError("Decorator factory call does not support **kwargs unpacking in v0.1")
+            keyword_args[keyword.arg] = ast.literal_eval(keyword.value)
+
+        bound = inspect.signature(factory_callable).bind(*positional_args, **keyword_args)
+    except DecoratorEvaluationError:
+        raise
+    except Exception as exc:
+        raise DecoratorEvaluationError(str(exc)) from exc
+
+    return BoundArgumentsView(arguments=dict(bound.arguments))
+
+
 def _eval_expr(expr: ast.expr, globals_dict: dict[str, object]) -> object:
     compiled = compile(ast.Expression(body=expr), filename="<sigx-eval>", mode="eval")
     return eval(compiled, globals_dict, None)  # noqa: S307

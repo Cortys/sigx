@@ -5,10 +5,13 @@ from pathlib import Path
 from sigx_gen.model.signature import ParamKind
 from sigx_gen.pipeline.discovery import (
     derive_module_name,
-    discover_functions,
     discover_modules,
     extract_signature_from_node,
 )
+
+
+def _discover_functions(src_root: Path):
+    return tuple(function for module in discover_modules(src_root) for function in module.functions)
 
 
 def test_module_name_derivation() -> None:
@@ -28,7 +31,7 @@ def test_discover_top_level_function(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    functions = discover_functions(src_root)
+    functions = _discover_functions(src_root)
 
     assert len(functions) == 1
     fn = functions[0]
@@ -50,7 +53,7 @@ def test_discover_class_method(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    functions = discover_functions(src_root)
+    functions = _discover_functions(src_root)
 
     assert len(functions) == 1
     fn = functions[0]
@@ -69,7 +72,7 @@ def test_extract_annotations_defaults_and_async(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    function = discover_functions(src_root)[0]
+    function = _discover_functions(src_root)[0]
     sig = extract_signature_from_node(function.node)
 
     assert function.is_async
@@ -98,7 +101,7 @@ def test_discovery_extracts_function_type_params(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    function = discover_functions(src_root)[0]
+    function = _discover_functions(src_root)[0]
     sig = extract_signature_from_node(function.node)
 
     assert sig.type_params == ("T: pkg.types.Bound = pkg.types.Default",)
