@@ -51,78 +51,114 @@ def resolve_decorator(
         target_expr = decorator_expr
 
     if isinstance(target_expr, ast.Name):
-        alias = alias_map.get(target_expr.id)
-        if alias is None:
-            return (
-                ResolvedDecoratorRef(
-                    module_name=module_name,
-                    object_name=target_expr.id,
-                    is_call=is_call,
-                    display_name=target_expr.id,
-                ),
-                (),
-            )
+        return _resolve_name_target(target_expr, module_name=module_name, alias_map=alias_map, is_call=is_call)
 
-        if alias.resolved_module is None or alias.resolved_attr is None:
-            return (
-                None,
-                (
-                    Diagnostic(
-                        level=DiagnosticLevel.WARNING,
-                        code="SX001",
-                        message=f"Could not resolve decorator name: {target_expr.id}",
-                        module_name=module_name,
-                    ),
-                ),
-            )
+    if isinstance(target_expr, ast.Attribute) and isinstance(target_expr.value, ast.Name):
+        return _resolve_attribute_target(
+            target_expr,
+            module_name=module_name,
+            alias_map=alias_map,
+            is_call=is_call,
+        )
 
+    return None, (
+        Diagnostic(
+            level=DiagnosticLevel.WARNING,
+            code="SX002",
+            message=f"Unsupported decorator syntax: {ast.unparse(decorator_expr)}",
+            module_name=module_name,
+        ),
+    )
+
+
+def _resolve_name_target(
+    target_expr: ast.Name,
+    *,
+    module_name: str,
+    alias_map: dict[str, ImportAlias],
+    is_call: bool,
+) -> tuple[ResolvedDecoratorRef | None, tuple[Diagnostic, ...]]:
+    alias = alias_map.get(target_expr.id)
+    if alias is None:
         return (
             ResolvedDecoratorRef(
-                module_name=alias.resolved_module,
-                object_name=alias.resolved_attr,
+                module_name=module_name,
+                object_name=target_expr.id,
                 is_call=is_call,
                 display_name=target_expr.id,
             ),
             (),
         )
 
-    if isinstance(target_expr, ast.Attribute) and isinstance(target_expr.value, ast.Name):
-        base_alias = alias_map.get(target_expr.value.id)
-        if base_alias is None or base_alias.resolved_module is None:
-            return (
-                None,
-                (
-                    Diagnostic(
-                        level=DiagnosticLevel.WARNING,
-                        code="SX001",
-                        message=f"Could not resolve decorator base: {target_expr.value.id}",
-                        module_name=module_name,
-                    ),
-                ),
-            )
-
-        object_name = (
-            target_expr.attr if base_alias.resolved_attr is None else f"{base_alias.resolved_attr}.{target_expr.attr}"
+    if alias.resolved_module is None or alias.resolved_attr is None:
+        return None, (
+            Diagnostic(
+                level=DiagnosticLevel.WARNING,
+                code="SX001",
+                message=f"Could not resolve decorator name: {target_expr.id}",
+                module_name=module_name,
+            ),
         )
 
+    return (
+        ResolvedDecoratorRef(
+            module_name=alias.resolved_module,
+            object_name=alias.resolved_attr,
+            is_call=is_call,
+            display_name=target_expr.id,
+        ),
+        (),
+    )
+
+
+def _resolve_attribute_target(
+    target_expr: ast.Attribute,
+    *,
+    module_name: str,
+    alias_map: dict[str, ImportAlias],
+    is_call: bool,
+) -> tuple[ResolvedDecoratorRef | None, tuple[Diagnostic, ...]]:
+    if not isinstance(target_expr.value, ast.Name):
+        return None, (
+            Diagnostic(
+                level=DiagnosticLevel.WARNING,
+                code="SX002",
+                message=f"Unsupported decorator syntax: {ast.unparse(target_expr)}",
+                module_name=module_name,
+            ),
+        )
+
+    base_alias = alias_map.get(target_expr.value.id)
+    if base_alias is None:
         return (
             ResolvedDecoratorRef(
-                module_name=base_alias.resolved_module,
-                object_name=object_name,
+                module_name=module_name,
+                object_name=f"{target_expr.value.id}.{target_expr.attr}",
                 is_call=is_call,
                 display_name=ast.unparse(target_expr),
             ),
             (),
         )
 
-    return (
-        None,
-        (
+    if base_alias.resolved_module is None:
+        return None, (
             Diagnostic(
                 level=DiagnosticLevel.WARNING,
-                code="SX002",
-                message=f"Unsupported decorator syntax: {ast.unparse(decorator_expr)}",
+                code="SX001",
+                message=f"Could not resolve decorator base: {target_expr.value.id}",
                 module_name=module_name,
             ),
+        )
+
+    object_name = (
+        target_expr.attr if base_alias.resolved_attr is None else f"{base_alias.resolved_attr}.{target_expr.attr}"
+    )
+    return (
+        ResolvedDecoratorRef(
+            module_name=base_alias.resolved_module,
+            object_name=object_name,
+            is_call=is_call,
+            display_name=ast.unparse(target_expr),
         ),
+        (),
     )

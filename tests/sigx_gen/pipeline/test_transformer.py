@@ -229,3 +229,59 @@ def test_invalid_transform_results_recorded(fixture_project: tuple[Path, str]) -
         and diagnostic.qualname == "invalid_item_job"
         for diagnostic in result.diagnostics
     )
+
+
+def test_local_class_method_decorator_resolves_without_sx001(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    package_name = f"fixturepkg_{uuid.uuid4().hex[:8]}"
+    package_dir = src_root / package_name
+    package_dir.mkdir(parents=True)
+
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "decorators.py").write_text(
+        (
+            "from sigx import stub_transform\n\n"
+            "class Decorators:\n"
+            f'    @stub_transform("{package_name}.stub_transforms:add_local_class_method")\n'
+            "    def add_local(func):\n"
+            "        return func\n"
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "stub_transforms.py").write_text(
+        (
+            "from sigx_gen.builder import SignatureBuilder\n\n"
+            "def add_local_class_method(ctx):\n"
+            "    builder = SignatureBuilder.from_signature(ctx.original)\n"
+            '    builder.add_kwonly("marker", annotation="Any", default="...")\n'
+            "    return builder.build()\n"
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "jobs.py").write_text(
+        (
+            f"from {package_name}.decorators import Decorators\n\n"
+            "@Decorators.add_local\n"
+            "def run(name: str) -> None:\n"
+            "    pass\n"
+        ),
+        encoding="utf-8",
+    )
+
+    sys.path.insert(0, str(src_root))
+    importlib.invalidate_caches()
+    try:
+        discovered = _discover_functions(src_root)
+        result = apply_transforms(discovered)
+    finally:
+        if str(src_root) in sys.path:
+            sys.path.remove(str(src_root))
+
+    transformed_run = next(
+        item for item in result.functions if item.module_name == f"{package_name}.jobs" and item.function_name == "run"
+    )
+    assert transformed_run.signatures[0].has_param("marker")
+    assert not any(
+        diagnostic.code == "SX001" and diagnostic.module_name == f"{package_name}.jobs" and diagnostic.qualname == "run"
+        for diagnostic in result.diagnostics
+    )

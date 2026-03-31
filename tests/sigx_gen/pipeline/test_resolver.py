@@ -65,6 +65,28 @@ def test_resolve_unresolved_name_falls_back_to_local_module() -> None:
     assert resolved.object_name == "local_dec"
 
 
+def test_resolve_local_class_attribute_falls_back_to_local_module() -> None:
+    expr = _decorator_expr("@Decorators.dec\ndef f():\n    pass\n")
+    resolved, diagnostics = resolve_decorator(expr, module_name="myproj.jobs", imports=())
+
+    assert diagnostics == ()
+    assert resolved is not None
+    assert resolved.module_name == "myproj.jobs"
+    assert resolved.object_name == "Decorators.dec"
+    assert not resolved.is_call
+
+
+def test_resolve_local_class_attribute_call_falls_back_to_local_module() -> None:
+    expr = _decorator_expr("@Decorators.dec(debug=True)\ndef f():\n    pass\n")
+    resolved, diagnostics = resolve_decorator(expr, module_name="myproj.jobs", imports=())
+
+    assert diagnostics == ()
+    assert resolved is not None
+    assert resolved.module_name == "myproj.jobs"
+    assert resolved.object_name == "Decorators.dec"
+    assert resolved.is_call
+
+
 def test_unsupported_expression_emits_diagnostic() -> None:
     expr = _decorator_expr("@registry['dec']\ndef f():\n    pass\n")
     resolved, diagnostics = resolve_decorator(expr, module_name="myproj.jobs", imports=())
