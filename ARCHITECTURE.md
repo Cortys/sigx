@@ -26,7 +26,7 @@ This document describes the current `sigx` runtime package and the restructured 
 - `src/sigx_gen/io/`
   - Serialized artifact I/O (`TransformPlan` JSON).
 - `src/sigx_gen/*.py`
-  - Thin compatibility wrappers and CLI entrypoint.
+  - CLI/config orchestration (`cli.py`, `config.py`) and transform builder helpers (`builder.py`).
 
 ### End-to-end flow
 
@@ -34,23 +34,26 @@ This document describes the current `sigx` runtime package and the restructured 
    - Walks `*.py` files and parses AST.
    - Collects module imports, top-level variables, class names, and functions/methods.
 
-2. `pipeline.transformer.apply_transforms(discovered_functions)`
-    - Applies decorator transforms in decorator-application order (bottom-to-top).
-    - Supports single or multi-signature transform results.
-    - Multi-signature outputs branch via cross-product semantics.
+2. `pipeline.transformer.apply_transforms(discovered_functions, module_files=...)`
+   - Applies decorator transforms in decorator-application order (bottom-to-top).
+   - Supports single or multi-signature transform results.
+   - Multi-signature outputs branch via cross-product semantics.
    - Uses static marker fallback when runtime decorator import/metadata lookup fails.
 
 3. Plan construction
    - `pipeline.planner.build_transform_plan(...)`
    - Converts transformed signatures into serialized symbol/module patch intents.
+   - Synthesizes deterministic typing imports from signature name usage (`Any`, `Literal`, `overload`).
 
 4. Stub update
-   - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, then patch using LibCST backend.
+   - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, guarantee each planned module stub exists via targeted fallback generation, then patch using LibCST backend.
+   - Optional `--prune-unplanned` removes `.pyi` files under output root that are not targeted by the generated plan (or reports drift in `--check`).
    - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans.
 
 5. `cli.py` orchestration
    - `generate`, `patch`, `plan`, `apply`
    - `--check`, `--fail-on-errors`, `--include`, `--exclude` supported where applicable
+   - `generate` additionally supports `--prune-unplanned`
    - Exit codes: `0` success, `1` check mismatch, `2` unrecoverable error.
 
 ## Design constraints
