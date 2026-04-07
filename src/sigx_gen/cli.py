@@ -8,6 +8,7 @@ import fnmatch
 import importlib
 from pathlib import Path
 import sys
+import tempfile
 
 from sigx_gen.bootstrap.basedpyright import generate_baseline_stubs
 from sigx_gen.config import ApplyConfig, GenerationConfig, PatchConfig, PlanConfig
@@ -78,45 +79,55 @@ def run_generate(config: GenerationConfig) -> int:
         _write_stderr(f"error: unreadable source root: {config.src_root}")
         return 2
 
-    plan_or_error = _build_plan_from_source(
-        src_root=config.src_root,
-        stub_root=config.out_root,
-        include=config.include,
-        exclude=config.exclude,
-        action="generation",
-    )
-    if isinstance(plan_or_error, str):
-        _write_stderr(f"error: generation failed: {plan_or_error}")
-        return 2
-    plan, diagnostics = plan_or_error
-
-    try:
-        generate_baseline_stubs(
+    with tempfile.TemporaryDirectory(prefix="sigx-gen-staging-") as temp_dir:
+        staging_root = Path(temp_dir) / "stubs"
+        plan_or_error = _build_plan_from_source(
             src_root=config.src_root,
-            out_root=config.out_root,
-            module_targets=((module.module_name, module.stub_file) for module in plan.modules),
+            stub_root=staging_root,
+            include=config.include,
+            exclude=config.exclude,
+            action="generation",
         )
-    except RuntimeError as exc:
-        _write_stderr(f"error: {exc}")
-        return 2
+        if isinstance(plan_or_error, str):
+            _write_stderr(f"error: generation failed: {plan_or_error}")
+            return 2
+        plan, diagnostics = plan_or_error
 
-    patch_exit_code = _apply_plan(
-        plan=plan,
-        check=config.check,
-        fail_on_errors=config.fail_on_errors,
-        initial_diagnostics=diagnostics,
-    )
-    if patch_exit_code == 2 or not config.prune_unplanned:
-        return patch_exit_code
+        try:
+            generate_baseline_stubs(
+                src_root=config.src_root,
+                out_root=staging_root,
+                module_targets=((module.module_name, module.stub_file) for module in plan.modules),
+            )
+        except RuntimeError as exc:
+            _write_stderr(f"error: {exc}")
+            return 2
 
-    prune_mismatches = _prune_unplanned_stubs(
-        out_root=config.out_root,
-        planned_stub_paths=tuple(module.stub_file for module in plan.modules),
-        check=config.check,
-    )
-    if config.check and prune_mismatches:
-        patch_exit_code = 1
-    return patch_exit_code
+        patch_exit_code = _apply_plan(
+            plan=plan,
+            check=False,
+            fail_on_errors=config.fail_on_errors,
+            initial_diagnostics=diagnostics,
+        )
+        if patch_exit_code == 2:
+            return 2
+
+        if config.prune_unplanned:
+            _prune_unplanned_stubs(
+                out_root=staging_root,
+                planned_stub_paths=tuple(module.stub_file for module in plan.modules),
+                check=False,
+            )
+
+        has_drift = _sync_generated_stubs(
+            staging_root=staging_root,
+            out_root=config.out_root,
+            check=config.check,
+            prune_unplanned=config.prune_unplanned,
+        )
+        if config.check and has_drift:
+            return 1
+        return 0
 
 
 def run_patch(config: PatchConfig) -> int:
@@ -392,6 +403,54 @@ def _prune_unplanned_stubs(
 
 def _normalize_path(path: Path) -> Path:
     return path.resolve(strict=False)
+
+
+def _sync_generated_stubs(
+    *,
+    staging_root: Path,
+    out_root: Path,
+    check: bool,
+    prune_unplanned: bool,
+) -> bool:
+    staged_files = _collect_stub_files(staging_root)
+    output_files = _collect_stub_files(out_root)
+    has_drift = False
+
+    for relative_path, staged_path in staged_files.items():
+        output_path = out_root / relative_path
+        existing_path = output_files.get(relative_path)
+        staged_text = staged_path.read_text(encoding="utf-8")
+        existing_text = None if existing_path is None else existing_path.read_text(encoding="utf-8")
+        if existing_text == staged_text:
+            continue
+
+        has_drift = True
+        if check:
+            _write_stderr(f"drift: {output_path}")
+            continue
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(staged_text, encoding="utf-8")
+
+    if not prune_unplanned:
+        return has_drift
+
+    for relative_path, output_path in output_files.items():
+        if relative_path in staged_files:
+            continue
+        has_drift = True
+        if check:
+            _write_stderr(f"drift: {output_path}")
+            continue
+        output_path.unlink()
+
+    return has_drift
+
+
+def _collect_stub_files(root: Path) -> dict[Path, Path]:
+    if not root.exists():
+        return {}
+    return {path.relative_to(root): path for path in root.rglob("*.pyi")}
 
 
 def _filter_modules(
