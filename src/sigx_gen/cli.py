@@ -36,11 +36,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_parser = subparsers.add_parser("generate", help="Generate baseline stubs and patch transforms")
     _add_common_scope_args(generate_parser)
-    generate_parser.add_argument(
-        "--prune-unplanned",
-        action="store_true",
-        help="Remove .pyi files in out-root that are not part of the transform plan",
-    )
 
     patch_parser = subparsers.add_parser("patch", help="Patch existing stubs with transform plan")
     patch_parser.add_argument("--src-root", required=True, help="Source root to scan")
@@ -112,18 +107,16 @@ def run_generate(config: GenerationConfig) -> int:
         if patch_exit_code == 2:
             return 2
 
-        if config.prune_unplanned:
-            _prune_unplanned_stubs(
-                out_root=staging_root,
-                planned_stub_paths=tuple(module.stub_file for module in plan.modules),
-                check=False,
-            )
+        _prune_generated_stubs(
+            out_root=staging_root,
+            planned_stub_paths=tuple(module.stub_file for module in plan.modules),
+            keep_package_inits=_should_keep_package_inits(src_root=config.src_root, out_root=config.out_root),
+        )
 
         has_drift = _sync_generated_stubs(
             staging_root=staging_root,
             out_root=config.out_root,
             check=config.check,
-            prune_unplanned=config.prune_unplanned,
         )
         if config.check and has_drift:
             return 1
@@ -236,7 +229,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 src_root=src_root,
                 out_root=out_root,
                 check=args.check,
-                prune_unplanned=args.prune_unplanned,
                 fail_on_errors=args.fail_on_errors,
                 include=tuple(args.include),
                 exclude=tuple(args.exclude),
@@ -378,27 +370,48 @@ def _is_readable_dir(path: Path) -> bool:
     return path.exists() and path.is_dir()
 
 
-def _prune_unplanned_stubs(
+def _prune_generated_stubs(
     *,
     out_root: Path,
     planned_stub_paths: tuple[Path, ...],
-    check: bool,
-) -> tuple[Path, ...]:
+    keep_package_inits: bool,
+) -> None:
     if not out_root.exists():
-        return ()
+        return
 
-    normalized_planned = {_normalize_path(path) for path in planned_stub_paths}
-    unplanned_paths = tuple(
-        sorted(path for path in out_root.rglob("*.pyi") if _normalize_path(path) not in normalized_planned)
+    keep_paths = _build_keep_stub_paths(
+        out_root=out_root,
+        planned_stub_paths=planned_stub_paths,
+        keep_package_inits=keep_package_inits,
     )
-    if check:
-        for path in unplanned_paths:
-            _write_stderr(f"drift: {path}")
-        return unplanned_paths
-
+    unplanned_paths = tuple(
+        sorted(path for path in out_root.rglob("*.pyi") if path.relative_to(out_root) not in keep_paths)
+    )
     for path in unplanned_paths:
         path.unlink()
-    return ()
+
+
+def _build_keep_stub_paths(
+    *,
+    out_root: Path,
+    planned_stub_paths: tuple[Path, ...],
+    keep_package_inits: bool,
+) -> set[Path]:
+    keep_paths: set[Path] = set()
+    for path in planned_stub_paths:
+        relative_path = path.relative_to(out_root)
+        keep_paths.add(relative_path)
+        if not keep_package_inits:
+            continue
+        parent = relative_path.parent
+        while parent != Path():
+            keep_paths.add(parent / "__init__.pyi")
+            parent = parent.parent
+    return keep_paths
+
+
+def _should_keep_package_inits(*, src_root: Path, out_root: Path) -> bool:
+    return _normalize_path(src_root) != _normalize_path(out_root)
 
 
 def _normalize_path(path: Path) -> Path:
@@ -410,7 +423,6 @@ def _sync_generated_stubs(
     staging_root: Path,
     out_root: Path,
     check: bool,
-    prune_unplanned: bool,
 ) -> bool:
     staged_files = _collect_stub_files(staging_root)
     output_files = _collect_stub_files(out_root)
@@ -431,9 +443,6 @@ def _sync_generated_stubs(
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(staged_text, encoding="utf-8")
-
-    if not prune_unplanned:
-        return has_drift
 
     for relative_path, output_path in output_files.items():
         if relative_path in staged_files:

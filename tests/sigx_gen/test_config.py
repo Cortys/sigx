@@ -9,7 +9,6 @@ def test_generation_config_defaults() -> None:
     config = GenerationConfig(src_root=Path("src"), out_root=Path("out"))
 
     assert not config.check
-    assert not config.prune_unplanned
     assert not config.fail_on_errors
     assert config.include == ()
     assert config.exclude == ()

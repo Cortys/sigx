@@ -46,15 +46,15 @@ This document describes the current `sigx` runtime package and the restructured 
    - Synthesizes deterministic typing imports from signature name usage (`Any`, `Literal`, `overload`).
 
 4. Stub update
-   - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, guarantee each planned module stub exists via targeted fallback generation, then patch using LibCST backend.
-   - Optional `--prune-unplanned` removes `.pyi` files under output root that are not targeted by the generated plan (or reports drift in `--check`).
-   - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans.
+    - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, guarantee each planned module stub exists via targeted fallback generation, then patch using LibCST backend.
+    - `generate` always prunes unmanaged `.pyi` files from the generated output set.
+    - When `out-root != src-root`, pruning keeps required ancestor `__init__.pyi` package stubs for planned modules; when `out-root == src-root`, pruning keeps only planned module stubs.
+    - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans.
 
 5. `cli.py` orchestration
-   - `generate`, `patch`, `plan`, `apply`
-   - `--check`, `--fail-on-errors`, `--include`, `--exclude` supported where applicable
-   - `generate` additionally supports `--prune-unplanned`
-   - Exit codes: `0` success, `1` check mismatch, `2` unrecoverable error.
+    - `generate`, `patch`, `plan`, `apply`
+    - `--check`, `--fail-on-errors`, `--include`, `--exclude` supported where applicable
+    - Exit codes: `0` success, `1` check mismatch, `2` unrecoverable error.
 
 ## Design constraints
 
