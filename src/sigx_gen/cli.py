@@ -109,6 +109,7 @@ def run_generate(config: GenerationConfig) -> int:
 
         _prune_generated_stubs(
             out_root=staging_root,
+            src_root=config.src_root,
             planned_stub_paths=tuple(module.stub_file for module in plan.modules),
             keep_package_inits=_should_keep_package_inits(src_root=config.src_root, out_root=config.out_root),
         )
@@ -373,6 +374,7 @@ def _is_readable_dir(path: Path) -> bool:
 def _prune_generated_stubs(
     *,
     out_root: Path,
+    src_root: Path,
     planned_stub_paths: tuple[Path, ...],
     keep_package_inits: bool,
 ) -> None:
@@ -381,6 +383,7 @@ def _prune_generated_stubs(
 
     keep_paths = _build_keep_stub_paths(
         out_root=out_root,
+        src_root=src_root,
         planned_stub_paths=planned_stub_paths,
         keep_package_inits=keep_package_inits,
     )
@@ -394,6 +397,7 @@ def _prune_generated_stubs(
 def _build_keep_stub_paths(
     *,
     out_root: Path,
+    src_root: Path,
     planned_stub_paths: tuple[Path, ...],
     keep_package_inits: bool,
 ) -> set[Path]:
@@ -405,7 +409,8 @@ def _build_keep_stub_paths(
             continue
         parent = relative_path.parent
         while parent != Path():
-            keep_paths.add(parent / "__init__.pyi")
+            if (src_root / parent / "__init__.py").exists():
+                keep_paths.add(parent / "__init__.pyi")
             parent = parent.parent
     return keep_paths
 

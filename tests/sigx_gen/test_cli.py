@@ -253,3 +253,23 @@ def test_generate_keeps_required_init_stubs_when_out_differs(tmp_path: Path, mon
     assert (out_root / "myproj" / "jobs.pyi").exists()
     assert (out_root / "myproj" / "__init__.pyi").exists()
     assert not (out_root / "myproj" / "util.pyi").exists()
+
+
+def test_generate_out_of_src_prunes_init_without_source_package_init(tmp_path: Path, monkeypatch) -> None:
+    work_src = _copy_fixture_src(tmp_path)
+    (work_src / "myproj" / "__init__.py").unlink()
+    out_root = tmp_path / "stubs"
+
+    def fake_basedpyright(*, src_root: Path, out_root: Path, module_targets: object) -> None:
+        del src_root, module_targets
+        _write_baseline_jobs_stub(out_root)
+        _write_extra_package_stubs(out_root)
+
+    monkeypatch.setattr("sigx_gen.cli.generate_baseline_stubs", fake_basedpyright)
+    _install_fake_patcher(monkeypatch)
+
+    code = run_generate(GenerationConfig(src_root=work_src, out_root=out_root, check=False))
+
+    assert code == 0
+    assert (out_root / "myproj" / "jobs.pyi").exists()
+    assert not (out_root / "myproj" / "__init__.pyi").exists()

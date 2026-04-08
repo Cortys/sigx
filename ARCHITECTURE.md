@@ -48,7 +48,7 @@ This document describes the current `sigx` runtime package and the restructured 
 4. Stub update
     - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, guarantee each planned module stub exists via targeted fallback generation, then patch using LibCST backend.
     - `generate` always prunes unmanaged `.pyi` files from the generated output set.
-    - When `out-root != src-root`, pruning keeps required ancestor `__init__.pyi` package stubs for planned modules; when `out-root == src-root`, pruning keeps only planned module stubs.
+    - When `out-root != src-root`, pruning keeps required ancestor `__init__.pyi` package stubs for planned modules only where the corresponding source `__init__.py` exists; when `out-root == src-root`, pruning keeps only planned module stubs.
     - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans.
 
 5. `cli.py` orchestration

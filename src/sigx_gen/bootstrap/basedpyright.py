@@ -31,9 +31,16 @@ def generate_baseline_stubs(
     target_stub_paths = {module_name: stub_path for module_name, stub_path in module_targets if module_name}
     if not target_stub_paths:
         return
-    top_level_packages = sorted({module_name.split(".")[0] for module_name in target_stub_paths})
+    required_package_stub_paths = _required_package_stub_paths(
+        src_root=src_root,
+        out_root=out_root,
+        module_names=target_stub_paths,
+    )
+    expected_stub_paths = {**required_package_stub_paths, **target_stub_paths}
+    top_level_packages = sorted({module_name.split(".")[0] for module_name in expected_stub_paths})
 
     out_root.mkdir(parents=True, exist_ok=True)
+    attempted_targets: set[str] = set()
 
     with tempfile.TemporaryDirectory(prefix="sigx-gen-basedpyright-") as temp_dir:
         project_file = Path(temp_dir) / "pyrightconfig.json"
@@ -45,9 +52,12 @@ def generate_baseline_stubs(
                 source_label=package,
                 src_root=src_root,
             )
+            attempted_targets.add(package)
 
         missing_modules = sorted(
-            module_name for module_name, stub_path in target_stub_paths.items() if not stub_path.exists()
+            module_name
+            for module_name, stub_path in expected_stub_paths.items()
+            if not stub_path.exists() and module_name not in attempted_targets
         )
         for module_name in missing_modules:
             _run_basedpyright_command(
@@ -58,12 +68,31 @@ def generate_baseline_stubs(
 
         still_missing = sorted(
             f"{module_name} -> {stub_path}"
-            for module_name, stub_path in target_stub_paths.items()
+            for module_name, stub_path in expected_stub_paths.items()
             if not stub_path.exists()
         )
         if still_missing:
             missing_report = ", ".join(still_missing)
             raise RuntimeError(f"basedpyright did not generate required module stubs: {missing_report}")
+
+
+def _required_package_stub_paths(
+    *,
+    src_root: Path,
+    out_root: Path,
+    module_names: Iterable[str],
+) -> dict[str, Path]:
+    required: dict[str, Path] = {}
+    for module_name in module_names:
+        parts = module_name.split(".")
+        for index in range(1, len(parts)):
+            package_parts = parts[:index]
+            package_init = src_root.joinpath(*package_parts, "__init__.py")
+            if not package_init.exists():
+                continue
+            package_name = ".".join(package_parts)
+            required[package_name] = out_root.joinpath(*package_parts, "__init__.pyi")
+    return required
 
 
 def _basedpyright_command(*, package: str, project_file: Path) -> list[str]:
