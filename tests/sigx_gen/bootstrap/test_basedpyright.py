@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
-from sigx_gen.bootstrap.basedpyright import _basedpyright_command, generate_baseline_stubs
+from sigx_gen.bootstrap.basedpyright import _basedpyright_command, _load_cache_state, generate_baseline_stubs
 
 
 def test_basedpyright_command_uses_project_and_not_output(monkeypatch) -> None:
@@ -205,3 +206,134 @@ def test_generate_baseline_stubs_does_not_require_namespace_package_init_stubs(m
     assert package_calls == ["pkg"]
     assert not (out_root / "pkg" / "__init__.pyi").exists()
     assert not (out_root / "pkg" / "sub" / "__init__.pyi").exists()
+
+
+def test_generate_baseline_stubs_reuses_cached_outputs(monkeypatch, tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    out_root = tmp_path / "stubs"
+    (src_root / "pkg").mkdir(parents=True)
+    (src_root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (src_root / "pkg" / "mod.py").write_text("def mod() -> None:\n    pass\n", encoding="utf-8")
+
+    monkeypatch.setattr("sigx_gen.bootstrap.basedpyright.shutil.which", lambda _: "/usr/bin/basedpyright")
+
+    def fake_run(command, *, check: bool, capture_output: bool, text: bool, env: dict[str, str]):
+        del check, capture_output, text, env
+        package = command[command.index("--createstub") + 1]
+        if package == "pkg":
+            (out_root / "pkg").mkdir(parents=True, exist_ok=True)
+            (out_root / "pkg" / "__init__.pyi").write_text("", encoding="utf-8")
+            (out_root / "pkg" / "mod.pyi").write_text("def mod() -> None: ...\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("sigx_gen.bootstrap.basedpyright.subprocess.run", fake_run)
+
+    generate_baseline_stubs(
+        src_root=src_root,
+        out_root=out_root,
+        module_targets=(("pkg.mod", out_root / "pkg" / "mod.pyi"),),
+    )
+
+    shutil.rmtree(out_root)
+    out_root.mkdir(parents=True)
+
+    def fail_run(*args: object, **kwargs: object):
+        del args, kwargs
+        msg = "basedpyright should not run on full cache hit"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("sigx_gen.bootstrap.basedpyright.subprocess.run", fail_run)
+
+    generate_baseline_stubs(
+        src_root=src_root,
+        out_root=out_root,
+        module_targets=(("pkg.mod", out_root / "pkg" / "mod.pyi"),),
+    )
+
+    assert (out_root / "pkg" / "__init__.pyi").exists()
+    assert (out_root / "pkg" / "mod.pyi").exists()
+
+
+def test_generate_baseline_stubs_regenerates_only_changed_target(monkeypatch, tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    out_root = tmp_path / "stubs"
+    (src_root / "pkg").mkdir(parents=True)
+    (src_root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (src_root / "pkg" / "a.py").write_text("def a() -> int:\n    return 1\n", encoding="utf-8")
+    (src_root / "pkg" / "b.py").write_text("def b() -> int:\n    return 2\n", encoding="utf-8")
+
+    monkeypatch.setattr("sigx_gen.bootstrap.basedpyright.shutil.which", lambda _: "/usr/bin/basedpyright")
+
+    def cold_run(command, *, check: bool, capture_output: bool, text: bool, env: dict[str, str]):
+        del check, capture_output, text, env
+        package = command[command.index("--createstub") + 1]
+        if package == "pkg":
+            (out_root / "pkg").mkdir(parents=True, exist_ok=True)
+            (out_root / "pkg" / "__init__.pyi").write_text("", encoding="utf-8")
+            (out_root / "pkg" / "a.pyi").write_text("def a() -> int: ...\n", encoding="utf-8")
+            (out_root / "pkg" / "b.pyi").write_text("def b() -> int: ...\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("sigx_gen.bootstrap.basedpyright.subprocess.run", cold_run)
+
+    generate_baseline_stubs(
+        src_root=src_root,
+        out_root=out_root,
+        module_targets=(
+            ("pkg.a", out_root / "pkg" / "a.pyi"),
+            ("pkg.b", out_root / "pkg" / "b.pyi"),
+        ),
+    )
+
+    (src_root / "pkg" / "b.py").write_text("def b() -> int:\n    return 3\n", encoding="utf-8")
+    shutil.rmtree(out_root)
+    out_root.mkdir(parents=True)
+
+    package_calls: list[str] = []
+
+    def warm_run(command, *, check: bool, capture_output: bool, text: bool, env: dict[str, str]):
+        del check, capture_output, text, env
+        package = command[command.index("--createstub") + 1]
+        package_calls.append(package)
+        if package == "pkg.b":
+            (out_root / "pkg").mkdir(parents=True, exist_ok=True)
+            (out_root / "pkg" / "b.pyi").write_text("def b() -> int: ...\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("sigx_gen.bootstrap.basedpyright.subprocess.run", warm_run)
+
+    generate_baseline_stubs(
+        src_root=src_root,
+        out_root=out_root,
+        module_targets=(
+            ("pkg.a", out_root / "pkg" / "a.pyi"),
+            ("pkg.b", out_root / "pkg" / "b.pyi"),
+        ),
+    )
+
+    assert package_calls == ["pkg.b"]
+    assert (out_root / "pkg" / "__init__.pyi").exists()
+    assert (out_root / "pkg" / "a.pyi").exists()
+    assert (out_root / "pkg" / "b.pyi").exists()
+
+
+def test_load_cache_state_invalidates_entries_on_environment_change(monkeypatch, tmp_path: Path) -> None:
+    cache_root = tmp_path / ".sigx_cache" / "basedpyright"
+    cache_root.mkdir(parents=True)
+    manifest = {
+        "schema_version": 1,
+        "environment": {"basedpyright_version": "old", "python_version": "3.13.0", "platform": "linux"},
+        "entries": {"pkg.mod": {"stub_rel_path": "pkg/mod.pyi"}},
+        "source_hash_index": {"pkg/mod.py": {"sha256": "abc"}},
+    }
+    (cache_root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sigx_gen.bootstrap.basedpyright._cache_environment",
+        lambda: {"basedpyright_version": "new", "python_version": "3.13.2", "platform": "linux"},
+    )
+
+    state = _load_cache_state(cache_root=cache_root)
+
+    assert state["entries"] == {}
+    assert state["source_hash_index"] == {"pkg/mod.py": {"sha256": "abc"}}
