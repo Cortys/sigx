@@ -1,0 +1,1 @@
+"""Plain decorator example package."""

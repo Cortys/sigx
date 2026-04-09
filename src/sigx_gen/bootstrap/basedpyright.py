@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import hashlib
 import importlib.metadata
 import json
@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import TypedDict, cast
 
 
 def generate_baseline_stubs(
@@ -153,6 +154,49 @@ def _required_package_stub_paths(
 _CACHE_SCHEMA_VERSION = 1
 
 
+class CacheEnvironment(TypedDict):
+    """Environment information for cache validity checks."""
+
+    basedpyright_version: str
+    python_version: str
+    platform: str
+
+
+class CacheEntry(TypedDict):
+    """Cache entry for a single module target."""
+
+    stub_rel_path: str
+    cache_stub_rel_path: str
+    source_rel_path: str
+    source_sha256: str
+
+
+class SourceHashIndexEntry(TypedDict):
+    """Index entry for source file hash information."""
+
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    sha256: str
+
+
+class CacheState(TypedDict):
+    """In-memory cache state representation."""
+
+    environment: CacheEnvironment
+    entries: dict[str, CacheEntry]
+    source_hash_index: dict[str, SourceHashIndexEntry]
+
+
+class CacheManifest(TypedDict):
+    """On-disk cache manifest structure."""
+
+    schema_version: int
+    environment: CacheEnvironment
+    entries: dict[str, CacheEntry]
+    source_hash_index: dict[str, SourceHashIndexEntry]
+
+
 def _target_source_paths(*, src_root: Path, target_names: Iterable[str]) -> dict[str, Path]:
     source_paths: dict[str, Path] = {}
     for target_name in target_names:
@@ -166,14 +210,123 @@ def _target_source_paths(*, src_root: Path, target_names: Iterable[str]) -> dict
     return source_paths
 
 
-def _load_cache_state(*, cache_root: Path) -> dict[str, object]:
-    manifest_path = cache_root / "manifest.json"
-    default_state = {
+def _default_cache_state() -> CacheState:
+    return {
         "environment": _cache_environment(),
         "entries": {},
         "source_hash_index": {},
     }
-    state: dict[str, object] = dict(default_state)
+
+
+def _parse_cache_environment(*, raw: object) -> CacheEnvironment | None:
+    if not isinstance(raw, dict):
+        return None
+
+    raw_dict = cast(dict[str, object], raw)
+    basedpyright_version = raw_dict.get("basedpyright_version")
+    python_version = raw_dict.get("python_version")
+    platform = raw_dict.get("platform")
+    if not isinstance(basedpyright_version, str):
+        return None
+    if not isinstance(python_version, str):
+        return None
+    if not isinstance(platform, str):
+        return None
+
+    return {
+        "basedpyright_version": basedpyright_version,
+        "python_version": python_version,
+        "platform": platform,
+    }
+
+
+def _parse_cache_entry(*, raw: object) -> CacheEntry | None:
+    if not isinstance(raw, dict):
+        return None
+
+    raw_dict = cast(dict[str, object], raw)
+    stub_rel_path = raw_dict.get("stub_rel_path")
+    cache_stub_rel_path = raw_dict.get("cache_stub_rel_path")
+    source_rel_path = raw_dict.get("source_rel_path")
+    source_sha256 = raw_dict.get("source_sha256")
+    if not isinstance(stub_rel_path, str):
+        return None
+    if not isinstance(cache_stub_rel_path, str):
+        return None
+    if not isinstance(source_rel_path, str):
+        return None
+    if not isinstance(source_sha256, str):
+        return None
+
+    return {
+        "stub_rel_path": stub_rel_path,
+        "cache_stub_rel_path": cache_stub_rel_path,
+        "source_rel_path": source_rel_path,
+        "source_sha256": source_sha256,
+    }
+
+
+def _parse_cache_entries(*, raw: object) -> dict[str, CacheEntry] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    raw_dict = cast(dict[object, object], raw)
+    entries: dict[str, CacheEntry] = {}
+    for target_name, entry_raw in raw_dict.items():
+        if not isinstance(target_name, str):
+            return None
+        entry = _parse_cache_entry(raw=entry_raw)
+        if entry is None:
+            return None
+        entries[target_name] = entry
+    return entries
+
+
+def _parse_source_hash_index_entry(*, raw: object) -> SourceHashIndexEntry | None:
+    if not isinstance(raw, dict):
+        return None
+
+    raw_dict = cast(dict[str, object], raw)
+    size = raw_dict.get("size")
+    mtime_ns = raw_dict.get("mtime_ns")
+    ctime_ns = raw_dict.get("ctime_ns")
+    sha256 = raw_dict.get("sha256")
+    if not isinstance(size, int):
+        return None
+    if not isinstance(mtime_ns, int):
+        return None
+    if not isinstance(ctime_ns, int):
+        return None
+    if not isinstance(sha256, str):
+        return None
+
+    return {
+        "size": size,
+        "mtime_ns": mtime_ns,
+        "ctime_ns": ctime_ns,
+        "sha256": sha256,
+    }
+
+
+def _parse_source_hash_index(*, raw: object) -> dict[str, SourceHashIndexEntry] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    raw_dict = cast(dict[object, object], raw)
+    source_hash_index: dict[str, SourceHashIndexEntry] = {}
+    for source_rel_path, entry_raw in raw_dict.items():
+        if not isinstance(source_rel_path, str):
+            return None
+        entry = _parse_source_hash_index_entry(raw=entry_raw)
+        if entry is None:
+            return None
+        source_hash_index[source_rel_path] = entry
+    return source_hash_index
+
+
+def _load_cache_state(*, cache_root: Path) -> CacheState:
+    manifest_path = cache_root / "manifest.json"
+    state = _default_cache_state()
     if not manifest_path.exists():
         return state
 
@@ -187,23 +340,23 @@ def _load_cache_state(*, cache_root: Path) -> dict[str, object]:
     if raw_state.get("schema_version") != _CACHE_SCHEMA_VERSION:
         return state
 
-    entries = raw_state.get("entries")
-    source_hash_index = raw_state.get("source_hash_index")
-    if not isinstance(entries, dict) or not isinstance(source_hash_index, dict):
+    entries = _parse_cache_entries(raw=raw_state.get("entries"))
+    source_hash_index = _parse_source_hash_index(raw=raw_state.get("source_hash_index"))
+    if entries is None or source_hash_index is None:
         return state
 
     current_environment = _cache_environment()
     state["environment"] = current_environment
     state["source_hash_index"] = source_hash_index
 
-    cached_environment = raw_state.get("environment")
-    if isinstance(cached_environment, dict) and cached_environment == current_environment:
+    cached_environment = _parse_cache_environment(raw=raw_state.get("environment"))
+    if cached_environment == current_environment:
         state["entries"] = entries
 
     return state
 
 
-def _cache_environment() -> dict[str, str]:
+def _cache_environment() -> CacheEnvironment:
     return {
         "basedpyright_version": _basedpyright_version(),
         "python_version": sys.version.split(" ", maxsplit=1)[0],
@@ -220,7 +373,7 @@ def _basedpyright_version() -> str:
 
 def _restore_cached_stubs(
     *,
-    cache_state: dict[str, object],
+    cache_state: CacheState,
     expected_stub_paths: dict[str, Path],
     source_paths: dict[str, Path],
     source_hashes: dict[str, str],
@@ -228,9 +381,7 @@ def _restore_cached_stubs(
     out_root: Path,
     cache_root: Path,
 ) -> int:
-    entries = cache_state.get("entries")
-    if not isinstance(entries, dict):
-        return 0
+    entries = cache_state["entries"]
 
     restored_count = 0
     for target_name, stub_path in expected_stub_paths.items():
@@ -238,24 +389,21 @@ def _restore_cached_stubs(
         if source_path is None:
             continue
         entry = entries.get(target_name)
-        if not isinstance(entry, dict):
+        if entry is None:
             continue
         source_hash = _source_hash(source_path=source_path, src_root=src_root, cache_state=cache_state)
         source_hashes[target_name] = source_hash
 
         expected_stub_rel = _as_posix(stub_path.relative_to(out_root))
         expected_source_rel = _as_posix(source_path.relative_to(src_root))
-        if entry.get("stub_rel_path") != expected_stub_rel:
+        if entry["stub_rel_path"] != expected_stub_rel:
             continue
-        if entry.get("source_rel_path") != expected_source_rel:
+        if entry["source_rel_path"] != expected_source_rel:
             continue
-        if entry.get("source_sha256") != source_hash:
+        if entry["source_sha256"] != source_hash:
             continue
 
-        cached_rel_path_raw = entry.get("cache_stub_rel_path")
-        if not isinstance(cached_rel_path_raw, str):
-            continue
-        cached_rel_path = Path(cached_rel_path_raw)
+        cached_rel_path = Path(entry["cache_stub_rel_path"])
         if cached_rel_path.is_absolute() or ".." in cached_rel_path.parts:
             continue
 
@@ -273,16 +421,14 @@ def _restore_cached_stubs(
 def _update_cache(
     *,
     cache_root: Path,
-    cache_state: dict[str, object],
+    cache_state: CacheState,
     expected_stub_paths: dict[str, Path],
     source_paths: dict[str, Path],
     source_hashes: dict[str, str],
     src_root: Path,
     out_root: Path,
 ) -> None:
-    entries = cache_state.get("entries")
-    if not isinstance(entries, dict):
-        entries = {}
+    entries = cache_state["entries"]
 
     stubs_root = cache_root / "stubs"
     stubs_root.mkdir(parents=True, exist_ok=True)
@@ -311,20 +457,17 @@ def _update_cache(
         }
 
     cache_state["entries"] = entries
-    manifest_payload = {
+    manifest_payload: CacheManifest = {
         "schema_version": _CACHE_SCHEMA_VERSION,
-        "environment": cache_state.get("environment", _cache_environment()),
+        "environment": cache_state["environment"],
         "entries": entries,
-        "source_hash_index": cache_state.get("source_hash_index", {}),
+        "source_hash_index": cache_state["source_hash_index"],
     }
     _write_json_atomic(path=cache_root / "manifest.json", data=manifest_payload)
 
 
-def _source_hash(*, source_path: Path, src_root: Path, cache_state: dict[str, object]) -> str:
-    index = cache_state.get("source_hash_index")
-    if not isinstance(index, dict):
-        index = {}
-        cache_state["source_hash_index"] = index
+def _source_hash(*, source_path: Path, src_root: Path, cache_state: CacheState) -> str:
+    index = cache_state["source_hash_index"]
 
     rel_key = _as_posix(source_path.relative_to(src_root))
     try:
@@ -342,7 +485,7 @@ def _source_hash(*, source_path: Path, src_root: Path, cache_state: dict[str, ob
     return digest
 
 
-def _write_json_atomic(*, path: Path, data: dict[str, object]) -> None:
+def _write_json_atomic(*, path: Path, data: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")

@@ -1,0 +1,1 @@
+"""Class-method example package."""
