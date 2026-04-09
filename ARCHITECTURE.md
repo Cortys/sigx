@@ -22,7 +22,7 @@ This document describes the current `sigx` runtime package and the restructured 
 - `src/sigx_gen/emit/`
   - Patch backend interfaces and implementation plus signature/import rendering helpers.
 - `src/sigx_gen/bootstrap/`
-  - Baseline stub bootstrap (`basedpyright`) used by `generate`.
+  - Source-driven stub generation used by `generate`.
 - `src/sigx_gen/io/`
   - Serialized artifact I/O (`TransformPlan` JSON).
 - `src/sigx_gen/*.py`
@@ -46,11 +46,11 @@ This document describes the current `sigx` runtime package and the restructured 
    - Synthesizes deterministic typing imports from signature name usage (`Any`, `Literal`, `overload`).
 
 4. Stub update
-    - **generate**: bootstrap baseline stubs with `bootstrap.basedpyright`, guarantee each planned module stub exists via targeted fallback generation, then patch using LibCST backend.
-    - Baseline bootstrap uses an incremental `.sigx_cache/basedpyright` cache keyed by source content hash and tool/runtime environment, restoring unchanged stubs and regenerating only missing or changed targets.
-    - `generate` always prunes unmanaged `.pyi` files from the generated output set.
-    - When `out-root != src-root`, pruning keeps required ancestor `__init__.pyi` package stubs for planned modules only where the corresponding source `__init__.py` exists; when `out-root == src-root`, pruning keeps only planned module stubs.
-    - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans.
+    - **generate**: for each planned module, parse source with LibCST, strip function/method bodies to `...` (while preserving docstrings), apply the module plan in-memory, and write staged `.pyi` output.
+    - Generation runs one worker per module via `joblib`, where each worker performs parse + patch + write for its module.
+    - `generate` stages output first, then syncs to `out-root`; this removes unmanaged `.pyi` files from `out-root` and keeps runs stateless/repeatable.
+    - When `out-root != src-root`, generation adds required ancestor `__init__.pyi` package stubs for planned modules only where the corresponding source `__init__.py` exists; when `out-root == src-root`, these package stubs are not synthesized.
+    - **patch/apply**: patch existing stubs via `emit.patch_libcst` directly from discovered or serialized plans; these modes do not synthesize package stubs or prune outputs.
 
 5. `cli.py` orchestration
     - `generate`, `patch`, `plan`, `apply`
@@ -61,5 +61,4 @@ This document describes the current `sigx` runtime package and the restructured 
 
 - Generation imports and evaluates project code; use only on trusted codebases.
 - Decorator syntax support is intentionally minimal.
-- Patch backend depends on `libcst` as a default runtime dependency.
-- Baseline generation depends on `basedpyright`.
+- Stub generation and patch backends depend on `libcst` as a default runtime dependency.

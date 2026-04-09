@@ -20,11 +20,24 @@ def build_libcst_backend() -> StubPatchBackend:
     Raises:
         RuntimeError: If LibCST is not installed.
     """
-    try:
-        cst = importlib.import_module("libcst")
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError("LibCST backend requested, but 'libcst' is not installed") from exc
-    return _LibCSTPatchBackend(cst)
+    return _LibCSTPatchBackend(_import_libcst())
+
+
+def patch_module_cst(
+    *, module: Any, module_plan: ModulePlan, cst: Any | None = None
+) -> tuple[Any, tuple[Diagnostic, ...]]:
+    """Patch one parsed module CST using a module plan.
+
+    Args:
+        module: Parsed ``libcst.Module`` to patch.
+        module_plan: Module plan with symbol and import updates.
+        cst: Optional imported ``libcst`` module object.
+
+    Returns:
+        Patched module object and diagnostics.
+    """
+    patcher = _LibCSTPatchBackend(cst or _import_libcst())
+    return patcher.patch_module_cst(module, module_plan)
 
 
 class _LibCSTPatchBackend:
@@ -48,8 +61,14 @@ class _LibCSTPatchBackend:
         Returns:
             Patched text and diagnostics.
         """
+        module = self._cst.parse_module(existing_text)
+        patched_module, diagnostics = self.patch_module_cst(module, module_plan)
+        return patched_module.code, diagnostics
+
+    def patch_module_cst(self, module: Any, module_plan: ModulePlan) -> tuple[Any, tuple[Diagnostic, ...]]:
+        """Patch one parsed module stub CST."""
         cst = self._cst
-        module = cst.parse_module(existing_text)
+        existing_text = module.code
         targets_top: dict[str, SymbolPlan] = {}
         targets_by_class: dict[str, dict[str, SymbolPlan]] = defaultdict(dict)
         for symbol in module_plan.symbols:
@@ -93,7 +112,7 @@ class _LibCSTPatchBackend:
                             file_path=str(module_plan.stub_file),
                         )
                     )
-                    replaced_body.extend(backend._symbol_statements(symbol))
+                    replaced_body.extend(backend._symbol_statements(symbol, docstring_statement=None))
 
                 return updated_node.with_changes(
                     body=updated_node.body.with_changes(body=tuple(replaced_body)),
@@ -117,7 +136,7 @@ class _LibCSTPatchBackend:
                             file_path=str(module_plan.stub_file),
                         )
                     )
-                    replaced_body.extend(backend._symbol_statements(symbol))
+                    replaced_body.extend(backend._symbol_statements(symbol, docstring_statement=None))
 
                 missing_classes = sorted(set(targets_by_class) - seen_classes)
                 for class_name in missing_classes:
@@ -139,7 +158,7 @@ class _LibCSTPatchBackend:
                 return updated_node.with_changes(body=tuple(replaced_body))
 
         patched_module = module.visit(_Patcher())
-        return patched_module.code, tuple(diagnostics)
+        return patched_module, tuple(diagnostics)
 
     def _replace_scope_body(
         self,
@@ -158,7 +177,13 @@ class _LibCSTPatchBackend:
                 symbol = targets.get(function_name)
                 if symbol is not None and function_name not in replaced_names:
                     replaced_names.add(function_name)
-                    new_body.extend(self._symbol_statements(symbol))
+                    docstring_statement = self._leading_docstring_statement(statement.body)
+                    new_body.extend(
+                        self._symbol_statements(
+                            symbol,
+                            docstring_statement=docstring_statement,
+                        )
+                    )
                     index += 1
                     while index < len(statements):
                         next_statement = statements[index]
@@ -173,23 +198,45 @@ class _LibCSTPatchBackend:
 
         return new_body, replaced_names
 
-    def _symbol_statements(self, symbol: SymbolPlan) -> list[Any]:
+    def _symbol_statements(self, symbol: SymbolPlan, *, docstring_statement: Any | None) -> list[Any]:
         if len(symbol.rendered_signatures) == 1:
             text = f"def {symbol.function_name}{symbol.rendered_signatures[0]}: ..."
-            return self._parse_statements(text)
+            statements = self._parse_statements(text)
+        else:
+            lines: list[str] = []
+            for signature in symbol.rendered_signatures:
+                lines.append("@overload")
+                lines.append(f"def {symbol.function_name}{signature}: ...")
+            statements = self._parse_statements("\n".join(lines))
 
-        lines: list[str] = []
-        for signature in symbol.rendered_signatures:
-            lines.append("@overload")
-            lines.append(f"def {symbol.function_name}{signature}: ...")
-        return self._parse_statements("\n".join(lines))
+        if docstring_statement is None:
+            return statements
+
+        cst = self._cst
+        for index, statement in enumerate(statements):
+            if not isinstance(statement, cst.FunctionDef):
+                continue
+            body_statements = [docstring_statement, self._ellipsis_statement()]
+            statements[index] = statement.with_changes(
+                body=cst.IndentedBlock(body=tuple(body_statements)),
+            )
+            break
+        return statements
+
+    def _leading_docstring_statement(self, body: Any) -> Any | None:
+        cst = self._cst
+        if not isinstance(body, cst.IndentedBlock) or not body.body:
+            return None
+        first_statement = body.body[0]
+        if self._is_docstring_statement(first_statement):
+            return first_statement
+        return None
 
     def _parse_statements(self, text: str) -> list[Any]:
         module = self._cst.parse_module(text + "\n")
         return list(module.body)
 
     def _import_insertion_index(self, statements: list[Any]) -> int:
-        cst = self._cst
         index = 0
         if statements and self._is_docstring_statement(statements[0]):
             index = 1
@@ -223,3 +270,13 @@ class _LibCSTPatchBackend:
         if isinstance(module, cst.Name):
             return module.value == "__future__"
         return False
+
+    def _ellipsis_statement(self) -> Any:
+        return self._cst.SimpleStatementLine(body=(self._cst.Expr(value=self._cst.Ellipsis()),))
+
+
+def _import_libcst() -> Any:
+    try:
+        return importlib.import_module("libcst")
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError("LibCST backend requested, but 'libcst' is not installed") from exc

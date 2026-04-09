@@ -5,7 +5,7 @@
 It is split into two packages:
 
 - `sigx`: tiny runtime marker decorators
-- `sigx-gen`: generator that scans source code, evaluates decorator transforms, and patches baseline stubs
+- `sigx-gen`: generator that scans source code, evaluates decorator transforms, and patches stubs
 
 ## Basic example
 
@@ -74,13 +74,13 @@ def either_a_or_b(ctx: TransformContext):
 
 ## CLI usage
 
-Generate baseline stubs and patch transforms in one command:
+Generate stubs from source and patch transforms in one command:
 
 ```bash
 sigx-gen generate --src-root src
 ```
 
-Patch existing stubs without regenerating the baseline:
+Patch existing stubs without regenerating stubs from source:
 
 ```bash
 sigx-gen patch --src-root src --stub-root stubs
@@ -98,6 +98,9 @@ Split planning/applying for CI or custom pipelines:
 sigx-gen plan --src-root src --stub-root stubs --plan-out sigx-plan.json
 sigx-gen apply --plan sigx-plan.json
 ```
+
+`plan`/`apply` mode only patches existing stubs. It does not synthesize package
+`__init__.pyi` files and does not remove or generate unrelated stubs.
 
 Filter scope and fail hard on transform errors:
 

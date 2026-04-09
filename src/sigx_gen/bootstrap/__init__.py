@@ -1,1 +1,1 @@
-"""Baseline stub bootstrap helpers for generation workflows."""
+"""Source-driven stub generation helpers for generation workflows."""

@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from sigx_gen.bootstrap.basedpyright import generate_baseline_stubs
+from sigx_gen.bootstrap.source_stubs import generate_stubs_from_source
 from sigx_gen.config import ApplyConfig, GenerationConfig, PatchConfig, PlanConfig
 from sigx_gen.emit.patch_base import apply_patch_plan
 from sigx_gen.emit.patch_libcst import build_libcst_backend
@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    generate_parser = subparsers.add_parser("generate", help="Generate baseline stubs and patch transforms")
+    generate_parser = subparsers.add_parser("generate", help="Generate source stubs and patch transforms")
     _add_common_scope_args(generate_parser)
 
     patch_parser = subparsers.add_parser("patch", help="Patch existing stubs with transform plan")
@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_generate(config: GenerationConfig) -> int:
-    """Generate baseline stubs via basedpyright and patch transform overrides.
+    """Generate source-derived stubs and patch transform overrides.
 
     Args:
         config: Generation configuration.
@@ -89,29 +89,26 @@ def run_generate(config: GenerationConfig) -> int:
         plan, diagnostics = plan_or_error
 
         try:
-            generate_baseline_stubs(
-                src_root=config.src_root,
-                out_root=staging_root,
-                module_targets=((module.module_name, module.stub_file) for module in plan.modules),
+            generation_diagnostics = generate_stubs_from_source(
+                module_plans=plan.modules,
             )
         except RuntimeError as exc:
             _write_stderr(f"error: {exc}")
             return 2
-
-        patch_exit_code = _apply_plan(
-            plan=plan,
-            check=False,
-            fail_on_errors=config.fail_on_errors,
-            initial_diagnostics=diagnostics,
-        )
-        if patch_exit_code == 2:
+        except Exception as exc:  # noqa: BLE001
+            _write_stderr(f"error: failed to generate stubs from source: {exc}")
             return 2
 
-        _prune_generated_stubs(
+        all_diagnostics = (*diagnostics, *generation_diagnostics)
+        _emit_diagnostics(all_diagnostics)
+        if _should_fail_on_errors(config.fail_on_errors, all_diagnostics):
+            return 2
+
+        _materialize_required_package_init_stubs(
             out_root=staging_root,
             src_root=config.src_root,
             planned_stub_paths=tuple(module.stub_file for module in plan.modules),
-            keep_package_inits=_should_keep_package_inits(src_root=config.src_root, out_root=config.out_root),
+            enabled=_should_keep_package_inits(src_root=config.src_root, out_root=config.out_root),
         )
 
         has_drift = _sync_generated_stubs(
@@ -119,9 +116,7 @@ def run_generate(config: GenerationConfig) -> int:
             out_root=config.out_root,
             check=config.check,
         )
-        if config.check and has_drift:
-            return 1
-        return 0
+        return 1 if config.check and has_drift else 0
 
 
 def run_patch(config: PatchConfig) -> int:
@@ -371,48 +366,26 @@ def _is_readable_dir(path: Path) -> bool:
     return path.exists() and path.is_dir()
 
 
-def _prune_generated_stubs(
+def _materialize_required_package_init_stubs(
     *,
     out_root: Path,
     src_root: Path,
     planned_stub_paths: tuple[Path, ...],
-    keep_package_inits: bool,
+    enabled: bool,
 ) -> None:
-    if not out_root.exists():
+    if not enabled:
         return
 
-    keep_paths = _build_keep_stub_paths(
-        out_root=out_root,
-        src_root=src_root,
-        planned_stub_paths=planned_stub_paths,
-        keep_package_inits=keep_package_inits,
-    )
-    unplanned_paths = tuple(
-        sorted(path for path in out_root.rglob("*.pyi") if path.relative_to(out_root) not in keep_paths)
-    )
-    for path in unplanned_paths:
-        path.unlink()
-
-
-def _build_keep_stub_paths(
-    *,
-    out_root: Path,
-    src_root: Path,
-    planned_stub_paths: tuple[Path, ...],
-    keep_package_inits: bool,
-) -> set[Path]:
-    keep_paths: set[Path] = set()
     for path in planned_stub_paths:
         relative_path = path.relative_to(out_root)
-        keep_paths.add(relative_path)
-        if not keep_package_inits:
-            continue
         parent = relative_path.parent
         while parent != Path():
             if (src_root / parent / "__init__.py").exists():
-                keep_paths.add(parent / "__init__.pyi")
+                package_stub = out_root / parent / "__init__.pyi"
+                package_stub.parent.mkdir(parents=True, exist_ok=True)
+                if not package_stub.exists():
+                    package_stub.write_text("", encoding="utf-8")
             parent = parent.parent
-    return keep_paths
 
 
 def _should_keep_package_inits(*, src_root: Path, out_root: Path) -> bool:
