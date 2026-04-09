@@ -136,8 +136,12 @@ def test_generate_prunes_init_stubs_when_out_is_src(tmp_path: Path) -> None:
     assert not (work_src / "myproj" / "util.pyi").exists()
 
 
-def test_generate_keeps_required_init_stubs_when_out_differs(tmp_path: Path) -> None:
+def test_generate_stubs_required_init_modules_when_out_differs(tmp_path: Path) -> None:
     work_src = _copy_fixture_src(tmp_path)
+    (work_src / "myproj" / "__init__.py").write_text(
+        "from .jobs import run_job\n",
+        encoding="utf-8",
+    )
     out_root = tmp_path / "stubs"
 
     code = run_generate(GenerationConfig(src_root=work_src, out_root=out_root, check=False))
@@ -145,6 +149,8 @@ def test_generate_keeps_required_init_stubs_when_out_differs(tmp_path: Path) -> 
     assert code == 0
     assert (out_root / "myproj" / "jobs.pyi").exists()
     assert (out_root / "myproj" / "__init__.pyi").exists()
+    init_stub_content = (out_root / "myproj" / "__init__.pyi").read_text(encoding="utf-8")
+    assert "from .jobs import run_job" in init_stub_content
     assert not (out_root / "myproj" / "util.pyi").exists()
 
 

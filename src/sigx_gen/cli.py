@@ -16,9 +16,9 @@ from sigx_gen.emit.patch_base import apply_patch_plan
 from sigx_gen.emit.patch_libcst import build_libcst_backend
 from sigx_gen.io.plan_json import read_plan_json, write_plan_json
 from sigx_gen.model.diagnostics import Diagnostic, DiagnosticLevel
-from sigx_gen.model.plan import TransformPlan
+from sigx_gen.model.plan import ModulePlan, TransformPlan
 from sigx_gen.model.symbols import DiscoveredModule
-from sigx_gen.pipeline.discovery import discover_modules
+from sigx_gen.pipeline.discovery import derive_module_name, discover_modules
 from sigx_gen.pipeline.planner import build_transform_plan
 from sigx_gen.pipeline.transformer import TransformedFunction, apply_transforms
 
@@ -87,10 +87,18 @@ def run_generate(config: GenerationConfig) -> int:
             _write_stderr(f"error: generation failed: {plan_or_error}")
             return 2
         plan, diagnostics = plan_or_error
+        generate_module_plans = _generation_module_plans(
+            transform_plan=plan,
+            src_root=config.src_root,
+            stub_root=staging_root,
+            include_required_package_inits=_should_keep_package_inits(
+                src_root=config.src_root, out_root=config.out_root
+            ),
+        )
 
         try:
             generation_diagnostics = generate_stubs_from_source(
-                module_plans=plan.modules,
+                module_plans=generate_module_plans,
             )
         except RuntimeError as exc:
             _write_stderr(f"error: {exc}")
@@ -103,13 +111,6 @@ def run_generate(config: GenerationConfig) -> int:
         _emit_diagnostics(all_diagnostics)
         if _should_fail_on_errors(config.fail_on_errors, all_diagnostics):
             return 2
-
-        _materialize_required_package_init_stubs(
-            out_root=staging_root,
-            src_root=config.src_root,
-            planned_stub_paths=tuple(module.stub_file for module in plan.modules),
-            enabled=_should_keep_package_inits(src_root=config.src_root, out_root=config.out_root),
-        )
 
         has_drift = _sync_generated_stubs(
             staging_root=staging_root,
@@ -366,26 +367,44 @@ def _is_readable_dir(path: Path) -> bool:
     return path.exists() and path.is_dir()
 
 
-def _materialize_required_package_init_stubs(
+def _generation_module_plans(
     *,
-    out_root: Path,
+    transform_plan: TransformPlan,
     src_root: Path,
-    planned_stub_paths: tuple[Path, ...],
-    enabled: bool,
-) -> None:
-    if not enabled:
-        return
+    stub_root: Path,
+    include_required_package_inits: bool,
+) -> tuple[ModulePlan, ...]:
+    module_plans = list(transform_plan.modules)
+    if not include_required_package_inits:
+        return tuple(module_plans)
 
-    for path in planned_stub_paths:
-        relative_path = path.relative_to(out_root)
+    existing_stub_rel_paths = {module_plan.stub_file.relative_to(stub_root) for module_plan in module_plans}
+    required_package_init_plans: list[ModulePlan] = []
+    for module_plan in transform_plan.modules:
+        relative_path = module_plan.stub_file.relative_to(stub_root)
         parent = relative_path.parent
         while parent != Path():
-            if (src_root / parent / "__init__.py").exists():
-                package_stub = out_root / parent / "__init__.pyi"
-                package_stub.parent.mkdir(parents=True, exist_ok=True)
-                if not package_stub.exists():
-                    package_stub.write_text("", encoding="utf-8")
+            package_source_init = src_root / parent / "__init__.py"
+            package_stub_rel_path = parent / "__init__.pyi"
+            if not package_source_init.exists() or package_stub_rel_path in existing_stub_rel_paths:
+                parent = parent.parent
+                continue
+
+            required_package_init_plans.append(
+                ModulePlan(
+                    module_name=derive_module_name(src_root=src_root, file_path=package_source_init),
+                    source_file=package_source_init,
+                    stub_file=stub_root / package_stub_rel_path,
+                    typing_imports=(),
+                    module_imports=(),
+                    symbols=(),
+                )
+            )
+            existing_stub_rel_paths.add(package_stub_rel_path)
             parent = parent.parent
+
+    required_package_init_plans.sort(key=lambda module_plan: module_plan.module_name)
+    return (*module_plans, *required_package_init_plans)
 
 
 def _should_keep_package_inits(*, src_root: Path, out_root: Path) -> bool:
