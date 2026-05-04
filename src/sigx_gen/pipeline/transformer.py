@@ -234,7 +234,7 @@ def _apply_decorator_application(  # noqa: PLR0911
         return False, current_signatures
 
     bound_args: BoundArgumentsView | None = None
-    runtime_eval_exception: Exception | None = None
+    argument_eval_failures: list[tuple[str, Exception]] = []
     if callable(decorator_object):
         try:
             decorated_module = _load_cached_module(
@@ -248,14 +248,15 @@ def _apply_decorator_application(  # noqa: PLR0911
                 cast("Callable[..., object]", decorator_object),
             )
         except Exception as exc:  # noqa: BLE001
-            runtime_eval_exception = exc
+            argument_eval_failures.append(("Runtime evaluation failed", exc))
             if callable(decorator_object):
                 try:
                     bound_args = evaluate_factory_arguments_literal_only(
                         decorator_expr,
                         cast("Callable[..., object]", decorator_object),
                     )
-                except DecoratorEvaluationError:
+                except DecoratorEvaluationError as literal_exc:
+                    argument_eval_failures.append(("Literal fallback failed", literal_exc))
                     bound_args = None
 
     if bound_args is None and static_marker is not None:
@@ -267,16 +268,16 @@ def _apply_decorator_application(  # noqa: PLR0911
                 )
             )
         except Exception as exc:  # noqa: BLE001
-            runtime_eval_exception = exc
+            argument_eval_failures.append(("Static marker fallback failed", exc))
 
     if bound_args is None:
-        message = "Decorator factory argument evaluation failed"
-        if runtime_eval_exception is not None:
-            message = f"Decorator factory argument evaluation failed: {runtime_eval_exception}"
         diagnostics.append(
             _diagnostic(
                 code="SX006",
-                message=message,
+                message=_fallback_failure_message(
+                    "Decorator factory argument evaluation failed",
+                    argument_eval_failures,
+                ),
                 function=function,
                 level=DiagnosticLevel.ERROR,
             )
@@ -565,3 +566,14 @@ def _diagnostic(
         qualname=function.qualname,
         file_path=str(function.file_path),
     )
+
+
+def _fallback_failure_message(prefix: str, failures: Sequence[tuple[str, Exception]]) -> str:
+    if not failures:
+        return prefix
+    details = "; ".join(f"{label}: {_format_exception(exc)}" for label, exc in failures)
+    return f"{prefix}: {details}"
+
+
+def _format_exception(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"

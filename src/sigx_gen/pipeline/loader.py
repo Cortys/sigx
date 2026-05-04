@@ -12,6 +12,21 @@ from types import ModuleType
 from sigx.model import TRANSFORM_ATTR, TransformMetadata
 
 
+class ModuleLoadError(Exception):
+    """Raised when every module loading strategy fails."""
+
+    def __init__(self, module_name: str, import_error: Exception, file_error: Exception) -> None:
+        """Build a combined module loading error."""
+        self.module_name = module_name
+        self.import_error = import_error
+        self.file_error = file_error
+        super().__init__(
+            f"Failed to load module '{module_name}'; "
+            f"importlib import failed: {_format_exception(import_error)}; "
+            f"file fallback failed: {_format_exception(file_error)}"
+        )
+
+
 def load_module(
     module_name: str,
     *,
@@ -32,10 +47,13 @@ def load_module(
     """
     try:
         return import_module(module_name)
-    except Exception:
+    except Exception as import_error:
         if module_files is None or module_name not in module_files:
             raise
-        return _load_module_from_file(module_name, module_files[module_name])
+        try:
+            return _load_module_from_file(module_name, module_files[module_name])
+        except Exception as file_error:  # noqa: BLE001
+            raise ModuleLoadError(module_name, import_error, file_error) from import_error
 
 
 def load_transform_metadata(obj: object) -> TransformMetadata | None:
@@ -100,3 +118,7 @@ def _load_module_from_file(module_name: str, file_path: Path) -> ModuleType:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _format_exception(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"

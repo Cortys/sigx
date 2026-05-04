@@ -158,6 +158,71 @@ def test_decorator_factory_transform_applied(fixture_project: tuple[Path, str]) 
     assert signatures["factory_job"][0].has_param("trace")
 
 
+def test_factory_argument_diagnostic_preserves_module_load_error_before_fallback_errors(tmp_path: Path) -> None:
+    src_root = tmp_path / "src"
+    package_name = f"fixturepkg_{uuid.uuid4().hex[:8]}"
+    package_dir = src_root / package_name
+    package_dir.mkdir(parents=True)
+
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "decorators.py").write_text(
+        (
+            "from sigx import stub_transform_factory\n\n"
+            f'@stub_transform_factory("{package_name}.stub_transforms:add_marker")\n'
+            "def predictor_transformation(permitted_predictor_types, preserve_predictor_type=False):\n"
+            "    def decorator(func):\n"
+            "        return func\n"
+            "    return decorator\n"
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "stub_transforms.py").write_text(
+        (
+            "from sigx_gen.builder import SignatureBuilder\n\n"
+            "def add_marker(ctx):\n"
+            "    builder = SignatureBuilder.from_signature(ctx.original)\n"
+            '    builder.add_kwonly("marker", annotation="Any", default="...")\n'
+            "    return builder.build()\n"
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "jobs.py").write_text(
+        (
+            f"from {package_name}.decorators import predictor_transformation\n\n"
+            "class LogitClassifier:\n"
+            "    pass\n\n"
+            "@predictor_transformation(\n"
+            "    permitted_predictor_types=(LogitClassifier,),\n"
+            "    preserve_predictor_type=True,\n"
+            ")\n"
+            "def temperature_scaling(name: str) -> None:\n"
+            "    pass\n\n"
+            "raise AttributeError(\"'function' object has no attribute 'delayed_register'\")\n"
+        ),
+        encoding="utf-8",
+    )
+
+    sys.path.insert(0, str(src_root))
+    importlib.invalidate_caches()
+    try:
+        discovered = _discover_functions(src_root)
+        result = apply_transforms(discovered)
+    finally:
+        if str(src_root) in sys.path:
+            sys.path.remove(str(src_root))
+
+    diagnostic = next(
+        item
+        for item in result.diagnostics
+        if item.code == "SX006" and item.module_name == f"{package_name}.jobs"
+    )
+    assert "Runtime evaluation failed: ModuleLoadError" in diagnostic.message
+    assert "AttributeError: 'function' object has no attribute 'delayed_register'" in diagnostic.message
+    assert "Literal fallback failed: DecoratorEvaluationError" in diagnostic.message
+    assert "Static marker fallback failed: ValueError" in diagnostic.message
+    assert diagnostic.message.index("Runtime evaluation failed") < diagnostic.message.index("Literal fallback failed")
+
+
 def test_multiple_transforms_apply_in_source_order(fixture_project: tuple[Path, str]) -> None:
     src_root, package_name = fixture_project
     discovered = _discover_functions(src_root)
