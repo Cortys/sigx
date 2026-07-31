@@ -4,7 +4,7 @@ dynamic = ["version"]
 description = "A pyi stub generator for typing complex function decorators."
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "joblib>=1.5.0",
     "libcst>=1.6.0",
@@ -49,7 +49,7 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py312"
 output-format = "full"
 force-exclude = true
 extend-exclude = ["**/*.pyi"]
